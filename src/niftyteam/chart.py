@@ -61,8 +61,9 @@ def render_page(
   .stats div {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 10px; padding: 10px 14px; min-width: 120px; }}
   .stats span {{ display: block; color: #746c62; font: 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; }}
   .note {{ color: #746c62; font-size: 14px; }}
-  .charts {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
-  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0; padding: 8px 8px 0; }}
+  .top {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; margin-bottom: 16px; }}
+  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 8px 8px 0; }}
+  .top figure {{ margin: 0; }}
   figcaption {{ font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; padding: 4px 8px 10px; }}
   .mark-spot {{ color: #0c7a3a; }}
   .mark-gift {{ color: #b86e00; }}
@@ -97,24 +98,26 @@ def render_page(
   .learn .up {{ color: #0c7a3a; }}
   .learn .down {{ color: #c62828; }}
   .spark {{ width: 72px; height: 16px; flex: none; }}
-  @media (max-width: 720px) {{ .charts {{ grid-template-columns: 1fr; }} }}
+  @media (max-width: 720px) {{ .top {{ grid-template-columns: 1fr; }} }}
 </style>
 </head>
 <body>
 <main>
-  <h1>Nifty board</h1>
-  <p class="sub">{escape(level)}</p>
-  {status}
-  <div class="stats">
-    {gift_tile}
-    {fii_tile}
-  </div>
-  {early}
-  {_matters(events)}
-  <div class="charts">
+  <div class="top">
+    <div>
+      <h1>Nifty board</h1>
+      <p class="sub">{escape(level)}</p>
+      {status}
+      <div class="stats">
+        {gift_tile}
+        {fii_tile}
+      </div>
+      {early}
+    </div>
     <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
-    <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
   </div>
+  {_matters(events)}
+  <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
   {log}
   {learning}
 </main>
