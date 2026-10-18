@@ -117,7 +117,7 @@ def render_page(
   </div>
   {early}
   <div class="charts">
-    <figure>{current}<figcaption><span class="mark-spot">Spot</span>, <span class="mark-gift">GIFT</span>, <span class="mark-next">next prediction</span>, <span class="mark-mean">200-day mean</span>. Curve is ±3 spreads of those predictions. Faint curves are the previous three bells.</figcaption></figure>
+    <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
     <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
   </div>
   {log}
@@ -432,7 +432,9 @@ def _forecast_svg(
     lo -= cushion
     hi += cushion
     span = hi - lo or 1
-    baseline = 188
+    plot_top, baseline = 16, 150
+    legend_rows = max(1, (sum(value is not None for value in (spot, gift, nxt, book_mean)) + 1) // 2)
+    height = 188 + legend_rows * 18
 
     def sx(x: float) -> float:
         return pad + (x - lo) / span * (width - 2 * pad)
@@ -446,14 +448,17 @@ def _forecast_svg(
         markers.append(("Next", nxt, "#1d4e89"))
     if book_mean is not None:
         markers.append(("Mean", book_mean, "#6b3fa0"))
-    labels = _label_rows(
-        [(sx(value), _marker_text(name, value, impact), color) for name, value, color in markers]
-    )
-    plot_top = 16 + (max(row for _, _, _, row in labels) + 1) * 12
 
-    parts = ["<svg viewBox='0 0 400 220' role='img' aria-label='Forecast'>"]
-    parts.append(f"<line x1='28' y1='{baseline}' x2='372' y2='{baseline}' stroke='#e4ddd2'/>")
-    def bell(mean: float, spread: float, opacity: float | None) -> str:
+    parts = [
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Forecast' "
+        "style='font-family:ui-sans-serif,sans-serif'>"
+    ]
+    for step in range(1, 4):
+        y = plot_top + (baseline - plot_top) * step / 4
+        parts.append(f"<line x1='{pad}' y1='{y:.1f}' x2='{width - pad}' y2='{y:.1f}' stroke='#f3efe8'/>")
+    parts.append(f"<line x1='{pad}' y1='{baseline}' x2='{width - pad}' y2='{baseline}' stroke='#e4ddd2'/>")
+
+    def curve(mean: float, spread: float) -> list[str]:
         peak = 1 / (spread * math.sqrt(2 * math.pi))
         band_lo, band_hi = mean - 3 * spread, mean + 3 * spread
 
@@ -461,62 +466,69 @@ def _forecast_svg(
             return plot_top + (1 - y / peak) * (baseline - plot_top)
 
         pts = []
-        for i in range(81):
-            x = band_lo + (band_hi - band_lo) * i / 80
+        for i in range(97):
+            x = band_lo + (band_hi - band_lo) * i / 96
             y = math.exp(-0.5 * ((x - mean) / spread) ** 2) / (spread * math.sqrt(2 * math.pi))
             pts.append(f"{sx(x):.1f},{sy(y):.1f}")
-        fade = "" if opacity is None else f" stroke-opacity='{opacity}'"
-        return f"<polyline fill='none' stroke='#6b3fa0' stroke-width='2'{fade} points='{' '.join(pts)}'/>"
+        return pts
+
+    def bell(mean: float, spread: float, opacity: float | None) -> None:
+        pts = curve(mean, spread)
+        if opacity is None:
+            edge = f"{sx(mean - 3 * spread):.1f},{baseline} "
+            close = f" {sx(mean + 3 * spread):.1f},{baseline}"
+            parts.append(
+                f"<polygon points='{edge}{' '.join(pts)}{close}' fill='#6b3fa0' fill-opacity='0.12' stroke='none'/>"
+            )
+            parts.append(f"<polyline fill='none' stroke='#6b3fa0' stroke-width='2' points='{' '.join(pts)}'/>")
+            return
+        parts.append(
+            f"<polyline fill='none' stroke='#6b3fa0' stroke-width='1.5' stroke-opacity='{opacity}' points='{' '.join(pts)}'/>"
+        )
 
     if sigma is not None and book_mean is not None:
         for mean, spread, fade in ghosts:
-            parts.append(bell(mean, spread, fade))
-        parts.append(bell(book_mean, sigma, None))
+            bell(mean, spread, fade)
+        bell(book_mean, sigma, None)
     elif ghosts:
         for mean, spread, fade in ghosts:
-            parts.append(bell(mean, spread, fade))
+            bell(mean, spread, fade)
     else:
         parts.append(
-            f"<text x='28' y='{baseline - 16}' fill='#746c62' font-size='12'>Bell starts after two predictions.</text>"
+            f"<text x='{pad}' y='{baseline - 16}' fill='#746c62' font-size='12'>Bell starts after two predictions.</text>"
         )
     for name, value, color in markers:
         x = sx(value)
-        dash = " stroke-dasharray='4 3'" if name == "Mean" else ""
+        dash = " stroke-dasharray='3 3'" if name == "Mean" else ""
         parts.append(
-            f"<line x1='{x:.1f}' y1='{plot_top}' x2='{x:.1f}' y2='{baseline}' stroke='{color}' stroke-width='2'{dash}/>"
+            f"<line x1='{x:.1f}' y1='{baseline - 8}' x2='{x:.1f}' y2='{baseline + 5}' stroke='{color}' stroke-width='2'{dash}/>"
         )
-    for x, text, color, row in labels:
-        anchor, lx = _text_anchor(x, width)
+    _axis_labels(parts, lo, hi, sx, baseline + 18, width)
+    for index, (name, value, color) in enumerate(markers):
+        column, row = divmod(index, legend_rows)
+        x = pad + column * 190
+        y = baseline + 42 + row * 18
+        parts.append(f"<circle cx='{x + 4}' cy='{y - 3}' r='3.5' fill='{color}'/>")
         parts.append(
-            f"<text x='{lx:.1f}' y='{12 + row * 12}' text-anchor='{anchor}' font-size='11' fill='{color}'>{escape(text)}</text>"
+            f"<text x='{x + 14}' y='{y}' font-size='12' fill='#1c1915'>{escape(_marker_text(name, value, impact))}</text>"
         )
     parts.append("</svg>")
     return "".join(parts)
 
 
-def _label_rows(items: list[tuple[float, str, str]]) -> list[tuple[float, str, str, int]]:
-    placed: list[tuple[float, str, str, int]] = []
-    rights: list[float] = []
-    for x, text, color in sorted(items, key=lambda item: item[0]):
-        half = max(28, len(text) * 3.2)
-        row = 0
-        while row < len(rights) and x - half < rights[row] + 6:
-            row += 1
-        edge = x + half
-        if row == len(rights):
-            rights.append(edge)
-        else:
-            rights[row] = edge
-        placed.append((x, text, color, row))
-    return placed
-
-
-def _text_anchor(x: float, width: int) -> tuple[str, float]:
-    if x < 56:
-        return "start", max(x, 8)
-    if x > width - 56:
-        return "end", min(x, width - 8)
-    return "middle", x
+def _axis_labels(parts: list[str], lo: float, hi: float, sx, y: float, width: int) -> None:
+    placed = -1e9
+    for step in range(5):
+        value = lo + (hi - lo) * step / 4
+        x = sx(value)
+        if x - placed < 52:
+            continue
+        anchor = "start" if step == 0 else "end" if step == 4 else "middle"
+        lx = max(8, min(width - 8, x))
+        parts.append(
+            f"<text x='{lx:.1f}' y='{y:.1f}' text-anchor='{anchor}' font-size='10' fill='#746c62'>{_level_text(value)}</text>"
+        )
+        placed = x
 
 
 def _error_chart(residuals: list[tuple[float, float]]) -> str:
