@@ -6,7 +6,7 @@ from html import escape
 from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
-from niftyteam.learn import agent_misses, learning_trail
+from niftyteam.learn import agent_misses, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
 
@@ -269,27 +269,27 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
 
 
 def _learn_row(name: str, misses: list[float]) -> str:
-    trail = learning_trail(misses)
+    trail = shift_trail(misses)
     if not trail:
         return (
             f"<div class='agent'><span class='name'>{escape(name)}</span>"
             f"<span class='line'>Not enough scores</span></div>"
         )
-    score = trail[-1]
-    kind = "up" if score > 55 else "down" if score < 45 else ""
+    shift = trail[-1]
+    kind = "up" if shift > 0.5 else "down" if shift < -0.5 else ""
     return (
         f"<div class='agent'><span class='name'>{escape(name)}</span>"
-        f"{_spark(trail)}<span class='line {kind}'>{score}</span></div>"
+        f"{_spark(trail)}<span class='line {kind}'>{impact_text(shift)}</span></div>"
     )
 
 
-def _spark(scores: list[int]) -> str:
+def _spark(scores: list[float]) -> str:
     width, height = 72, 16
     pts = []
     last = max(len(scores) - 1, 1)
     for index, score in enumerate(scores):
         x = 2 + (width - 4) * index / last
-        y = 2 + (height - 4) * (1 - score / 100)
+        y = 2 + (height - 4) * (1 - (score + 30) / 60)
         pts.append(f"{x:.1f},{y:.1f}")
     return (
         f"<svg class='spark' viewBox='0 0 {width} {height}' aria-hidden='true'>"

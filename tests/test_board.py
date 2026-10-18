@@ -6,16 +6,16 @@ import pytest
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, watch_line
 from niftyteam.chart import render_page
 from niftyteam.config import impact_class
-from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, learned_midpoint, next_sigma_floor
-from niftyteam.estimate import apply_family_bias, estimate_headline, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
-from niftyteam.learn import learning_score, learning_trail
+from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
+from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
+from niftyteam.learn import call_shift, learning_score, learning_trail
 from niftyteam.horizons import forecast_move, next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
 from niftyteam.search import parse_gift
 from niftyteam.store import Store
-from niftyteam.tick import _fold_feed, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, miss_titles
+from niftyteam.tick import _fold_feed, _make_claim, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, miss_titles
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -535,4 +535,96 @@ def test_brent_headline_does_not_hide_a_down_crude_feed(tmp_path, monkeypatch):
     _fold_feed(display, feed)
     assert display["crude"][0] == "Feed down"
     store.close()
+
+
+def test_a_live_print_is_not_replaced_by_the_old_average(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    for _ in range(8):
+        store.add_family_points("gift:gap", -5)
+        store.add_family_pair("gift:gap", -40, -5)
+    stamp = datetime(2026, 10, 18, 12, tzinfo=IST)
+    claim = _make_claim(_source("gift"), gift_gap_estimate(-80), "gift:1", stamp, 25000, store)
+    assert claim.driver == pytest.approx(-80)
+    assert claim.midpoint == pytest.approx(-80)
+    store.close()
+
+
+def test_thirty_clean_pairs_scale_the_next_print(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    for _ in range(30):
+        store.add_family_pair("gift:gap", -40, -20, clean=True)
+    stamp = datetime(2026, 10, 18, 12, tzinfo=IST)
+    claim = _make_claim(_source("gift"), gift_gap_estimate(-80), "gift:1", stamp, 25000, store)
+    assert claim.midpoint == pytest.approx(-40)
+    store.close()
+
+
+def test_old_attributed_pairs_do_not_set_the_slope(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    for _ in range(30):
+        store.add_family_pair("gift:gap", -40, -5)
+    stamp = datetime(2026, 10, 18, 12, tzinfo=IST)
+    claim = _make_claim(_source("gift"), gift_gap_estimate(-80), "gift:1", stamp, 25000, store)
+    assert claim.midpoint == pytest.approx(-80)
+    assert store.family_pairs("gift:gap", clean_only=True) == []
+    store.close()
+
+
+def test_a_headline_shifts_by_its_usual_miss(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    for _ in range(4):
+        store.add_family_residual("world:crude:down", 10)
+    guess = {
+        "beat": "global",
+        "direction": "down",
+        "points_low": 40,
+        "points_high": 90,
+        "midpoint": -65,
+        "confidence": 0.25,
+        "headline": "Crude jumps",
+        "shock_key": "world:crude:down",
+        "body": "Crude jumps",
+    }
+    stamp = datetime(2026, 10, 18, 12, tzinfo=IST)
+    claim = _make_claim(_source(), guess, "https://example.com/oil", stamp, 25000, store)
+    assert claim.driver is None
+    assert claim.midpoint == pytest.approx(-60)
+    assert call_shift([10, 10, 10, 10]) == pytest.approx(5)
+    store.close()
+
+
+def test_pcr_keeps_the_live_sign():
+    higher = pcr_estimate(0.2, 0.05, -10)
+    lower = pcr_estimate(-0.2, 0.05, 10)
+    assert higher["direction"] == "up"
+    assert higher["driver"] == pytest.approx(0.2)
+    assert lower["direction"] == "down"
+    assert lower["driver"] == pytest.approx(-0.2)
+
+
+def test_age_does_not_raise_the_weight():
+    source = _source(n=200, weight=1)
+    claim = _claim("FII selling", "https://example.com/fii", "fii:down", -20, confidence=1)
+    assert claim_weight(claim, source, shrink_until=20) == pytest.approx(1)
+
+
+def test_learning_row_shows_the_next_shift():
+    now = datetime(2026, 10, 18, 15, tzinfo=IST)
+    claim = _claim("Crude jumps", "https://example.com/oil", "world:crude:down", -65)
+    claim.beat = "global"
+    claim.residual = 10
+    claim.ts = now.isoformat()
+    page = render_page(None, [], [], 25000, 4, claims=[claim])
+    assert "Not enough scores" in page
+    row = page.split(">World<", 1)[1].split("</div>", 1)[0]
+    assert "+2" in row
+
+
+def test_fit_move_adds_the_usual_miss():
+    short = [(2.0, -10.0) for _ in range(29)]
+    assert fit_move(short, 4.0, -8.0) == pytest.approx(-8.0)
+    line = [(2.0, -10.0) for _ in range(30)]
+    assert fit_move(line, 4.0, -8.0) == pytest.approx(-20.0)
+    mixed = [(1.0, -10.0)] * 15 + [(2.0, -12.0)] * 15
+    assert fit_move(mixed, 4.0, -8.0) == pytest.approx(-28.0)
 

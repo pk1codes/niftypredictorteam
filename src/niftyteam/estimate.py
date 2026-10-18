@@ -138,12 +138,11 @@ def pcr_estimate(delta: float, trailing_std: float, _learned_sign: float, label:
     }
 
 
-def oi_change_estimate(net: float, trailing_std: float, learned_sign: float) -> dict | None:
+def oi_change_estimate(net: float, trailing_std: float, _learned_sign: float) -> dict | None:
     std = trailing_std if trailing_std > 1000 else 50000
     if abs(net) < max(20000, std):
         return None
     sign = 1 if net > 0 else -1
-    del learned_sign
     magnitude = min(40, abs(net) / std * 15)
     low = max(8, magnitude * 0.6)
     high = max(low + 5, magnitude * 1.4)
