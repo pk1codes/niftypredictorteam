@@ -6,5 +6,3 @@ data/*
 !data/niftyteam.sqlite
 .env
 firebase-config.js
-functions/niftyteam/
-functions/beats.yaml
