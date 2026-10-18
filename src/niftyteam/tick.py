@@ -27,13 +27,15 @@ from niftyteam.config import (
 from niftyteam.ensemble import apply_score, book_std, build_ensemble, next_sigma_floor
 from niftyteam.estimate import (
     LEVEL_RULES,
+    apply_family_bias,
     estimate_headline,
+    family_key,
     gift_gap_estimate,
     level_estimate,
     oi_change_estimate,
     pcr_estimate,
 )
-from niftyteam.horizons import day_open, last_cash_close, next_open, session_close, session_move
+from niftyteam.horizons import day_open, last_cash_close, next_open, session_close, session_move, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Source
 from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
 from niftyteam.scout import query_for, scout_sentence, search_web
@@ -69,6 +71,10 @@ def tick(root=None) -> int:
         if level_claims:
             worked.add("levels")
         open_call, ensemble = _publish(store, config, claims, stamp, nifty, worked, last_cash_close(bars, stamp))
+        if ensemble is not None and ensemble.ts == stamp.isoformat():
+            pending = store.meta("pending_ignored")
+            if pending:
+                store.set_meta(f"ignored:{ensemble.id}", pending)
         _log_roster(
             store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call,
         )
@@ -149,7 +155,7 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                     continue
                 if soften:
                     guess["confidence"] *= 0.5
-                claim = _make_claim(source, guess, item["url"], stamp, nifty)
+                claim = _make_claim(source, guess, item["url"], stamp, nifty, store)
                 if store.add_claim(claim):
                     claims.append(claim)
                     prior = best.get(guess["beat"])
@@ -231,7 +237,7 @@ def _oi_leg(store, source, stamp, nifty, leg, learned) -> list[Claim]:
 def _keep_pcr_claim(store, source, stamp, nifty, guess, url) -> list[Claim]:
     if guess is None:
         return []
-    claim = _make_claim(source, guess, url, stamp, nifty)
+    claim = _make_claim(source, guess, url, stamp, nifty, store)
     if not store.add_claim(claim):
         return []
     return [claim]
@@ -279,7 +285,7 @@ def _flow_claim(store, source, stamp, nifty, net: float, day: str, label: str, k
         "body": f"{label} net {net:,.0f} crore today.",
         "horizon": "session",
     }
-    claim = _make_claim(source, guess, f"{key}:{day}", stamp, nifty)
+    claim = _make_claim(source, guess, f"{key}:{day}", stamp, nifty, store)
     if not store.add_claim(claim):
         return []
     return [claim]
@@ -342,7 +348,7 @@ def _gift_gap(store: Store, stamp, quote: dict | None, last_close: float | None)
     when = next_open(stamp)
     store.set_meta("gift_open_day", when.date().isoformat())
     url = f"gift:{when.date().isoformat()}"
-    claim = _make_claim(source, guess, url, stamp, last_close)
+    claim = _make_claim(source, guess, url, stamp, last_close, store)
     if not store.add_claim(claim):
         return []
     return [claim]
@@ -380,7 +386,7 @@ def _levels(store: Store, stamp, nifty: float | None) -> list[Claim]:
         guess = level_estimate(name, value - previous, store.level_pairs(name))
         if guess is None:
             continue
-        claim = _make_claim(source, guess, f"level:{name}:{day}", stamp, nifty)
+        claim = _make_claim(source, guess, f"level:{name}:{day}", stamp, nifty, store)
         if store.add_claim(claim):
             claims.append(claim)
     return claims
@@ -402,6 +408,7 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
     stories = 0
     new_sources = 0
     claims: list[Claim] = []
+    ignored: list[str] = []
     failed = False
     try:
         with httpx.Client(follow_redirects=True) as client:
@@ -413,6 +420,9 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
     for item in results:
         guess = estimate_headline(item["title"])
         if guess is None:
+            title = item.get("title") or ""
+            if title:
+                ignored.append(title)
             continue
         guess = dict(guess)
         guess["confidence"] = min(0.2, guess["confidence"] * 0.5)
@@ -429,7 +439,7 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
             source = store.source("scout")
         if source is None:
             continue
-        claim = _make_claim(source, guess, item["url"], stamp, nifty)
+        claim = _make_claim(source, guess, item["url"], stamp, nifty, store)
         if store.add_claim(claim):
             stories += 1
             claims.append(claim)
@@ -439,6 +449,7 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
         line = scout_sentence(stories, new_sources)
     else:
         line = QUIET
+    store.set_meta("pending_ignored", json.dumps(ignored[:8]))
     store.add_event(stamp.isoformat(), line, 0, agent="scout")
     return claims, failed
 
@@ -499,7 +510,9 @@ def _publish(store, config, claims: list[Claim], stamp, nifty: float | None, wor
     store.set_meta("last_tick", stamp.isoformat())
     store.set_meta("agents", str(max(1, len(worked))))
     opened = _one_call(store, config, [row for row in claims if row.horizon == "open"], stamp, last_close, "open")
-    session = _one_call(store, config, [row for row in claims if row.horizon != "open"], stamp, nifty, "session")
+    session = _one_call(
+        store, config, [row for row in claims if row.horizon not in {"open", "week"}], stamp, nifty, "session",
+    )
     return opened or store.latest_ensemble("open"), session or store.latest_ensemble("session")
 
 
@@ -533,7 +546,7 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
     book = book_std(residuals)
     by_ensemble: dict[str, list[Claim]] = {}
     for claim in due:
-        if not claim.ensemble_id:
+        if not claim.ensemble_id and claim.horizon != "week":
             continue
         if claim.horizon == "open" and claim.nifty_level is None:
             continue
@@ -543,6 +556,10 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
             if opened is None or claim.nifty_level is None:
                 continue
             actual = opened - claim.nifty_level
+        elif claim.horizon == "week":
+            actual = week_move(bars, score_day, claim.nifty_level)
+            if actual is None:
+                continue
         else:
             actual = session_move(bars, score_day)
             if actual is None:
@@ -551,6 +568,8 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
         claim.residual = actual - claim.midpoint
         claim.status = "scored"
         store.save_claim(claim)
+        if family_key(claim.shock_key):
+            store.add_family_residual(claim.shock_key, claim.residual)
         source = store.source(claim.source_id)
         if source is not None:
             apply_score(source, claim.residual, book)
@@ -562,18 +581,19 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
             store.add_level_pair(claim.source_id, claim.driver, actual)
         word = "fell" if actual < 0 else "rose" if actual > 0 else "was flat"
         inside = ""
-        ensemble = _ensemble_by_id(store, claim.ensemble_id)
+        ensemble = _ensemble_by_id(store, claim.ensemble_id) if claim.ensemble_id else None
         if ensemble is not None and abs(actual - ensemble.mu) <= ensemble.sigma:
             inside = " Inside the curve."
         miss = abs(claim.residual)
-        label = "open" if claim.horizon == "open" else "session"
+        label = claim.horizon if claim.horizon in {"open", "week"} else "session"
         store.add_event(
             stamp.isoformat(),
             f"Scored the {label} call. Nifty {word} {abs(actual):.0f}. Missed the mean by {miss:.0f}.{inside}",
             actual,
             agent="score",
         )
-        by_ensemble.setdefault(claim.ensemble_id, []).append(claim)
+        if claim.ensemble_id:
+            by_ensemble.setdefault(claim.ensemble_id, []).append(claim)
     for ensemble_id, group in by_ensemble.items():
         ensemble = _ensemble_by_id(store, ensemble_id)
         if ensemble is None:
@@ -593,6 +613,11 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
             ensemble.actual = move
         ensemble.residual = ensemble.actual - ensemble.mu
         store.save_ensemble(ensemble)
+        if ensemble.horizon != "week":
+            titles = miss_titles(ensemble.residual, ensemble.sigma, _ignored_titles(store, ensemble.id))
+            if titles:
+                store.add_misses(stamp.isoformat(), titles)
+                store.add_event(stamp.isoformat(), f"Kept {len(titles)} missed stories.", ensemble.residual, agent="score")
     _retune_floor(store, config)
 
 
@@ -726,9 +751,36 @@ def _print_board(store: Store) -> None:
         print(f"{event.ts[11:16]}  {event.sentence}  {event.impact:+.0f}")
 
 
-def _make_claim(source: Source, guess: dict, url: str, stamp, nifty: float | None) -> Claim:
+def miss_titles(residual: float, sigma: float, titles: list[str]) -> list[str]:
+    if sigma <= 0 or abs(residual) <= 1.5 * sigma:
+        return []
+    return [title for title in titles if title][:8]
+
+
+def _ignored_titles(store: Store, ensemble_id: str) -> list[str]:
+    raw = store.meta(f"ignored:{ensemble_id}")
+    if not raw:
+        return []
+    try:
+        found = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [title for title in found if isinstance(title, str)]
+
+
+def _make_claim(source: Source, guess: dict, url: str, stamp, nifty: float | None, store: Store | None = None) -> Claim:
+    guess = dict(guess)
+    key = family_key(guess["shock_key"])
+    if store is not None and key:
+        count, total = store.family_stats(key)
+        guess = apply_family_bias(guess, count, total)
     horizon = guess.get("horizon") or "session"
-    when = next_open(stamp) if horizon == "open" else session_close(stamp)
+    if horizon == "open":
+        when = next_open(stamp)
+    elif horizon == "week":
+        when = sessions_ahead(stamp)
+    else:
+        when = session_close(stamp)
     return Claim(
         id=uuid4().hex[:12],
         beat=guess["beat"],

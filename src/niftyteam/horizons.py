@@ -34,6 +34,26 @@ def session_move(bars: list, day: str) -> float | None:
     return None
 
 
+def sessions_ahead(stamp: datetime, count: int = 5) -> datetime:
+    day = stamp.date()
+    left = count
+    while left > 0:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            left -= 1
+    return datetime.combine(day, time(15, 30), tzinfo=stamp.tzinfo or IST)
+
+
+def week_move(bars: list, score_day: str, anchor: float | None) -> float | None:
+    if anchor is None:
+        return None
+    for bar in bars:
+        day, close, _opened = _parts(bar)
+        if day >= score_day:
+            return close - anchor
+    return None
+
+
 def day_open(bars: list, day: str) -> float | None:
     for bar in bars:
         bar_day, _close, opened = _parts(bar)

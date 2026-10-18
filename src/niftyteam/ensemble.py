@@ -38,14 +38,33 @@ def build_ensemble(claims: list[Claim], sources: dict[str, Source], sigma_floor:
         band = max(claim.points_high - claim.points_low for claim, _ in rows) / 2
         shocks.append({"key": key, "x": midpoint, "w": total, "band": band, "ids": [c.id for c, _ in rows]})
 
-    weight_sum = sum(shock["w"] for shock in shocks)
-    mu = sum(shock["x"] * shock["w"] for shock in shocks) / weight_sum
-    var = sum(shock["w"] * (shock["x"] - mu) ** 2 for shock in shocks) / weight_sum
-    sigma = math.sqrt(var)
-    if len(shocks) == 1:
-        sigma = max(sigma, shocks[0]["band"])
+    agreed = _agreed_move(shocks)
+    if agreed is not None:
+        mu, sigma = agreed
+    else:
+        weight_sum = sum(shock["w"] for shock in shocks)
+        mu = sum(shock["x"] * shock["w"] for shock in shocks) / weight_sum
+        var = sum(shock["w"] * (shock["x"] - mu) ** 2 for shock in shocks) / weight_sum
+        sigma = math.sqrt(var)
+        if len(shocks) == 1:
+            sigma = max(sigma, shocks[0]["band"])
     sigma = max(sigma, sigma_floor)
     return {"mu": mu, "sigma": sigma, "n_shocks": len(shocks), "ids": [i for shock in shocks for i in shock["ids"]]}
+
+
+def _agreed_move(shocks: list[dict]) -> tuple[float, float] | None:
+    chosen: list[dict] | None = None
+    for sign in (1, -1):
+        group = [shock for shock in shocks if shock["x"] * sign > 0 and abs(shock["x"]) >= 8]
+        if len(group) < 3:
+            continue
+        if chosen is None or sum(shock["w"] for shock in group) > sum(shock["w"] for shock in chosen):
+            chosen = group
+    if chosen is None:
+        return None
+    weight_sum = sum(shock["w"] for shock in chosen)
+    mu = sum(shock["x"] * shock["w"] for shock in chosen) / weight_sum
+    return mu, abs(mu) * 0.6
 
 
 def apply_score(source: Source, residual: float, book_std: float) -> str | None:

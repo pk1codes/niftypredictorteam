@@ -6,15 +6,15 @@ import pytest
 from niftyteam.chart import render_page
 from niftyteam.config import impact_class
 from niftyteam.ensemble import apply_score, build_ensemble, next_sigma_floor
-from niftyteam.estimate import estimate_headline, fitted_move, gift_gap_estimate, level_estimate, oi_change_estimate, pcr_estimate
+from niftyteam.estimate import apply_family_bias, estimate_headline, fitted_move, gift_gap_estimate, level_estimate, oi_change_estimate, pcr_estimate
 from niftyteam.learn import learning_score, learning_trail
-from niftyteam.horizons import next_open, session_close
+from niftyteam.horizons import next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
 from niftyteam.search import parse_gift
 from niftyteam.store import Store
-from niftyteam.tick import _publish, _report_limits, _scout, accuracy_notes
+from niftyteam.tick import _publish, _report_limits, _scout, accuracy_notes, miss_titles
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -175,6 +175,54 @@ def test_score_updates_weight_and_chart_colors():
     assert "Scored an open call." in page
     assert "Needs a look" not in page
     assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · mean +8" in page
+
+
+def test_hard_day_families():
+    hormuz = estimate_headline("Missile war raises fear of a Hormuz blockade")
+    assert hormuz["shock_key"] == "world:crude:down"
+    assert hormuz["direction"] == "down"
+    cyclone = estimate_headline("Severe cyclone nears the Gujarat coast")
+    assert cyclone["shock_key"] == "calamity:cyclone"
+    assert cyclone["beat"] == "crude"
+    buy = estimate_headline("Reliance announces a share buyback")
+    assert buy["shock_key"] == "weights:Reliance:buyback"
+    assert estimate_headline("A small firm declares a dividend") is None
+    assert estimate_headline("Reliance board declares a dividend")["shock_key"] == "weights:Reliance:dividend"
+    assert estimate_headline("Scientists announce a battery discovery") is None
+    found = estimate_headline("Reliance strikes oil in a new discovery")
+    assert found["shock_key"] == "find:Reliance"
+    assert found["horizon"] == "week"
+    merger = estimate_headline("HDFC Bank in talks for a merger")
+    assert merger["horizon"] == "week"
+    assert merger["shock_key"] == "weights:HDFC Bank:merger"
+
+
+def test_three_shocks_keep_the_crash():
+    sources = {f"s{i}": _source(f"s{i}") for i in range(4)}
+    claims = [
+        _claim("a", "https://a", "world:crude:down", -40, source_id="s0"),
+        _claim("b", "https://b", "world:global:down", -30, source_id="s1"),
+        _claim("c", "https://c", "calamity:cyclone", -25, source_id="s2"),
+        _claim("d", "https://d", "fx:up", 5, source_id="s3"),
+    ]
+    built = build_ensemble(claims, sources, sigma_floor=10)
+    assert built["mu"] < -20
+    assert built["sigma"] >= abs(built["mu"]) * 0.6 - 0.01
+
+
+def test_family_bias_shifts_the_next_claim():
+    guess = {"midpoint": -40, "points_high": 60, "confidence": 0.4, "shock_key": "world:crude:down"}
+    shifted = apply_family_bias(guess, 4, 40)
+    assert shifted["midpoint"] == pytest.approx(-35)
+
+
+def test_week_score_waits_five_sessions():
+    stamp = datetime(2026, 10, 18, 10, tzinfo=IST)
+    due = sessions_ahead(stamp)
+    assert due.isoformat().startswith("2026-10-23")
+    assert week_move([("2026-10-23", 25100, 25020)], "2026-10-23", 25000) == pytest.approx(100)
+    assert miss_titles(-80, 30, ["Cyclone headline", ""]) == ["Cyclone headline"]
+    assert miss_titles(-10, 30, ["Quiet headline"]) == []
 
 
 def test_two_beats_one_shock_one_mean():

@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS families (
+    key TEXT PRIMARY KEY,
+    n_scored INTEGER NOT NULL DEFAULT 0,
+    residual_sum REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS misses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    title TEXT NOT NULL
+);
 """
 
 
@@ -345,6 +355,39 @@ class Store:
             (name, change, move),
         )
         self.conn.commit()
+
+    def family_stats(self, key: str) -> tuple[int, float]:
+        row = self.conn.execute(
+            "SELECT n_scored, residual_sum FROM families WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return 0, 0.0
+        return int(row["n_scored"]), float(row["residual_sum"])
+
+    def add_family_residual(self, key: str, residual: float) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO families (key, n_scored, residual_sum) VALUES (?, 1, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                n_scored = n_scored + 1,
+                residual_sum = residual_sum + excluded.residual_sum
+            """,
+            (key, residual),
+        )
+        self.conn.commit()
+
+    def add_misses(self, ts: str, titles: list[str]) -> int:
+        self.conn.executemany(
+            "INSERT INTO misses (ts, title) VALUES (?, ?)",
+            [(ts, title) for title in titles],
+        )
+        self.conn.commit()
+        return len(titles)
+
+    def miss_count(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS n FROM misses").fetchone()
+        return int(row["n"])
 
     def level_pairs(self, name: str) -> list[tuple[float, float]]:
         rows = self.conn.execute(

@@ -17,13 +17,24 @@ SKIP_BITS = (
     "stocks with",
     "retail investors",
     "ex-record",
-    "dividend",
-    "stock split",
-    "bonus issue",
     "says it",
     "says it’s",
     "says it's",
 )
+
+SUPPLY_BITS = ("dividend", "stock split", "bonus issue")
+
+CORPORATE = (
+    (r"\b(buyback|buy back)\b", "buyback", "up", 8, 25, "session"),
+    (r"\b(merger|acquisition|acquires|takeover)\b", "merger", "up", 10, 30, "week"),
+    (r"\b(guidance cut|cuts guidance|profit warning)\b", "guidance", "down", 15, 40, "session"),
+    (r"\b(pledge|pledges|pledged)\b", "pledge", "down", 8, 20, "session"),
+    (r"\b(plant halt|shuts plant|plant shutdown|halts production)\b", "halt", "down", 10, 30, "session"),
+    (r"\bdividend\b", "dividend", "down", 4, 12, "session"),
+    (r"\b(stock split|bonus issue)\b", "supply", "up", 4, 12, "session"),
+)
+
+FAMILY_ACTIONS = {"buyback", "merger", "guidance", "pledge", "halt", "dividend", "supply"}
 
 HEAVY_PATTERNS = (
     (r"\breliance\b", "Reliance"),
@@ -42,7 +53,13 @@ HEAVY_PATTERNS = (
 def estimate_headline(title: str) -> dict | None:
     raw = html.unescape(title).strip()
     text = " " + raw.lower() + " "
+    name = _heavyweight(text)
+    corporate = _corporate(text, name, raw)
+    if corporate is not None:
+        return corporate
     if "?" in raw or any(bit in text for bit in SKIP_BITS):
+        return None
+    if any(bit in text for bit in SUPPLY_BITS):
         return None
 
     oil = bool(re.search(r"\b(crude|oil|brent|wti)\b", text))
@@ -60,7 +77,6 @@ def estimate_headline(title: str) -> dict | None:
     ):
         return _band("flows", "up", 20, 50, 0.35, raw, "flows:up")
 
-    name = _heavyweight(text)
     if name and re.search(r"\b(profit|pat|earnings|nii)\b", text):
         jumped = re.search(r"\b(jump|jumps|spurt|spurts|surge|beat)\b", text)
         rose = re.search(r"\b(rise|rises|rose|up|shines)\b", text)
@@ -89,7 +105,13 @@ def estimate_headline(title: str) -> dict | None:
         if re.search(r"\b(rally|gain|gains|rise|record)\b", text):
             return _band("global", "up", 15, 40, 0.28, raw, "global:up")
 
-    return None
+    world = _world(text, raw)
+    if world is not None:
+        return world
+    calamity = _calamity(text, raw)
+    if calamity is not None:
+        return calamity
+    return _find(text, name, raw)
 
 
 def pcr_estimate(delta: float, trailing_std: float, learned_sign: float, label: str = "Put-call ratio", shock: str = "pcr") -> dict | None:
@@ -227,9 +249,80 @@ def _heavyweight(text: str) -> str | None:
     return None
 
 
-def _band(beat: str, direction: str, low: float, high: float, confidence: float, headline: str, shock: str) -> dict:
+def family_key(shock_key: str) -> str | None:
+    if shock_key.startswith(("world:", "calamity:", "find:")):
+        return shock_key
+    parts = shock_key.split(":")
+    if len(parts) == 3 and parts[0] == "weights" and parts[2] in FAMILY_ACTIONS:
+        return shock_key
+    return None
+
+
+def apply_family_bias(guess: dict, n: int, residual_sum: float) -> dict:
+    shifted = dict(guess)
+    if n < 5:
+        shifted["points_high"] = round(float(shifted["points_high"]) * 1.4, 1)
+        shifted["confidence"] = min(float(shifted["confidence"]), 0.25)
+    if n > 0:
+        bias = (residual_sum / n) * (n / (n + 4))
+        bias = max(-30.0, min(30.0, bias))
+        shifted["midpoint"] = round(float(shifted["midpoint"]) + bias, 1)
+    return shifted
+
+
+def _corporate(text: str, name: str | None, raw: str) -> dict | None:
+    if not name:
+        return None
+    for pattern, action, direction, low, high, horizon in CORPORATE:
+        if re.search(pattern, text):
+            return _band("weights", direction, low, high, 0.25, raw, f"weights:{name}:{action}", horizon)
+    return None
+
+
+def _world(text: str, raw: str) -> dict | None:
+    energy = re.search(r"\b(hormuz|strait|lng|tanker)\b", text)
+    geo = re.search(r"\b(war|invasion|sanction|sanctions|missile|blockade)\b", text)
+    chips = re.search(r"\b(taiwan|chip ban|chips ban|semiconductor)\b", text) and re.search(
+        r"\b(ban|curb|curbs|restriction|restrictions)\b", text
+    )
+    if energy and geo:
+        return _band("crude", "down", 40, 90, 0.25, raw, "world:crude:down")
+    if geo or chips:
+        return _band("global", "down", 25, 70, 0.25, raw, "world:global:down")
+    return None
+
+
+def _calamity(text: str, raw: str) -> dict | None:
+    if re.search(r"\bcyclone\b", text):
+        beat = "crude" if re.search(r"\b(gujarat|mumbai|west coast|arabian)\b", text) else "global"
+        return _band(beat, "down", 20, 70, 0.2, raw, "calamity:cyclone")
+    if re.search(r"\bearthquake\b", text):
+        return _band("global", "down", 15, 50, 0.2, raw, "calamity:earthquake")
+    if re.search(r"\b(flood|floods)\b", text):
+        return _band("global", "down", 15, 50, 0.2, raw, "calamity:flood")
+    if re.search(r"\b(weak monsoon|monsoon deficit|deficient monsoon)\b", text):
+        return _band("weights", "down", 10, 35, 0.2, raw, "calamity:monsoon")
+    return None
+
+
+def _find(text: str, name: str | None, raw: str) -> dict | None:
+    if not name or not re.search(r"\b(discovery|discovers|battery|drug approval|approves drug|oil find|strikes oil)\b", text):
+        return None
+    return _band("weights", "up", 4, 15, 0.15, raw, f"find:{name}", "week")
+
+
+def _band(
+    beat: str,
+    direction: str,
+    low: float,
+    high: float,
+    confidence: float,
+    headline: str,
+    shock: str,
+    horizon: str = "session",
+) -> dict:
     sign = 1 if direction == "up" else -1
-    return {
+    row = {
         "beat": beat,
         "direction": direction,
         "points_low": low,
@@ -240,3 +333,6 @@ def _band(beat: str, direction: str, low: float, high: float, confidence: float,
         "shock_key": shock,
         "body": headline,
     }
+    if horizon != "session":
+        row["horizon"] = horizon
+    return row
