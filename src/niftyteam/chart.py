@@ -5,7 +5,7 @@ from html import escape
 
 from datetime import datetime, timedelta
 
-from niftyteam.config import BEAT_LABELS, BOARD_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
+from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
 from niftyteam.learn import agent_misses, learning_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
@@ -210,6 +210,9 @@ def _matters(events: list[Event]) -> str:
         else:
             moving.append((name, sentence, "ok", impact))
     moving.sort(key=lambda row: abs(row[3]), reverse=True)
+    boss = found.get(BOSS_AGENT)
+    if boss is not None:
+        watching.append(("Boss", boss.sentence, _row_kind(boss.sentence), 0))
     score = found.get(SCORE_AGENT)
     if score is not None and ("Missed" in score.sentence or "Kept" in score.sentence):
         moving.insert(0, ("Score", score.sentence, "bad", score.impact))
@@ -227,7 +230,7 @@ def _matter_rows(rows: list[tuple[str, str, str, float]]) -> str:
     html = []
     for name, sentence, kind, impact in rows:
         points = ""
-        if kind == "ok":
+        if kind == "ok" and not sentence.startswith("Restarted"):
             points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
         html.append(
             f"<div class='matter {kind}'><span class='name'>{escape(name)}</span>"
@@ -298,20 +301,32 @@ def _spark(scores: list[int]) -> str:
 def _roster_rows(events: list[Event]) -> str:
     found = _by_agent(events)
     names = list(ROSTER) + [(BOARD_AGENT, "Board")]
-    return "\n".join(_agent_row(name, found.get(key)) for key, name in names)
+    rows = [_agent_row(name, found.get(key)) for key, name in names]
+    boss = found.get(BOSS_AGENT)
+    if boss is not None:
+        rows.insert(0, _agent_row("Boss", boss))
+    return "\n".join(rows)
+
+
+def _row_kind(sentence: str) -> str:
+    if sentence.startswith("Watching"):
+        return "idle"
+    if "still stuck" in sentence.lower():
+        return "bad"
+    if sentence in MISSED_LINES or sentence == "No check":
+        return "bad"
+    if sentence in STATUS_LINES:
+        return "idle"
+    return "ok"
 
 
 def _agent_row(name: str, event: Event | None) -> str:
     sentence = event.sentence if event else "No check"
     impact = event.impact if event else 0
-    if sentence in MISSED_LINES or sentence == "No check":
-        kind = "bad"
-    elif sentence in STATUS_LINES:
-        kind = "idle"
-    else:
-        kind = "ok"
+    kind = _row_kind(sentence)
     points = ""
-    if sentence not in STATUS_LINES and sentence != "No check":
+    boss = sentence.startswith("Watching") or sentence.startswith("Restarted")
+    if not boss and sentence not in STATUS_LINES and sentence != "No check":
         points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
     return (
         f"<div class='agent {kind}'><span class='dot {kind}'></span>"

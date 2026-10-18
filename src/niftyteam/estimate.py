@@ -114,15 +114,11 @@ def estimate_headline(title: str) -> dict | None:
     return _find(text, name, raw)
 
 
-def pcr_estimate(delta: float, trailing_std: float, learned_sign: float, label: str = "Put-call ratio", shock: str = "pcr") -> dict | None:
+def pcr_estimate(delta: float, trailing_std: float, _learned_sign: float, label: str = "Put-call ratio", shock: str = "pcr") -> dict | None:
     std = trailing_std if trailing_std > 0.01 else 0.05
     if abs(delta) < max(0.04, std):
         return None
     sign = 1 if delta > 0 else -1
-    if learned_sign != 0:
-        sign = 1 if learned_sign > 0 else -1
-        if delta < 0:
-            sign *= -1
     magnitude = min(40, abs(delta) / std * 15)
     low = max(8, magnitude * 0.6)
     high = max(low + 5, magnitude * 1.4)
@@ -138,6 +134,7 @@ def pcr_estimate(delta: float, trailing_std: float, learned_sign: float, label: 
         "headline": sentence,
         "shock_key": f"{shock}:up" if sign > 0 else f"{shock}:down",
         "body": sentence,
+        "driver": delta,
     }
 
 
@@ -146,10 +143,7 @@ def oi_change_estimate(net: float, trailing_std: float, learned_sign: float) -> 
     if abs(net) < max(20000, std):
         return None
     sign = 1 if net > 0 else -1
-    if learned_sign != 0:
-        sign = 1 if learned_sign > 0 else -1
-        if net < 0:
-            sign *= -1
+    del learned_sign
     magnitude = min(40, abs(net) / std * 15)
     low = max(8, magnitude * 0.6)
     high = max(low + 5, magnitude * 1.4)
@@ -165,6 +159,7 @@ def oi_change_estimate(net: float, trailing_std: float, learned_sign: float) -> 
         "headline": sentence,
         "shock_key": "pcr:oi:up" if sign > 0 else "pcr:oi:down",
         "body": sentence,
+        "driver": net,
     }
 
 
@@ -183,6 +178,7 @@ def gift_gap_estimate(gap: float) -> dict | None:
         "headline": f"GIFT Nifty is {mid:+.0f} points versus the last close.",
         "shock_key": "gift:gap",
         "body": f"GIFT Nifty is {mid:+.0f} points versus the last close.",
+        "driver": gap,
         "horizon": "open",
     }
 
@@ -209,7 +205,7 @@ def level_estimate(name: str, change: float, pairs: list[tuple[float, float]]) -
     if abs(change) < rule["threshold"]:
         return None
     fallback = rule["scale"] * change
-    mid = fitted_move(pairs, change, fallback)
+    mid = fit_move(pairs, change, fallback)
     mid = max(-80.0, min(80.0, mid))
     if abs(mid) < 4:
         return None
@@ -240,6 +236,18 @@ def fitted_move(pairs: list[tuple[float, float]], change: float, fallback: float
         return fallback
     slope = sum(item[1] * item[0] for item in pairs) / denom
     return slope * change
+
+
+def fit_move(pairs: list[tuple[float, float]], change: float, fallback: float) -> float:
+    """Scale today's print by the learned slope, then add the usual miss."""
+    if len(pairs) < 30:
+        return fallback
+    denom = sum(item[0] * item[0] for item in pairs)
+    if denom <= 0:
+        return fallback
+    slope = sum(item[1] * item[0] for item in pairs) / denom
+    bias = sum(item[1] - slope * item[0] for item in pairs) / len(pairs)
+    return slope * change + bias
 
 
 def _heavyweight(text: str) -> str | None:

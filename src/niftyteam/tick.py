@@ -6,11 +6,14 @@ from uuid import uuid4
 
 import httpx
 
+from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, missed, wake, watch_line
 from niftyteam.chart import render_page
 from niftyteam.config import (
     BOARD_AGENT,
+    BOSS_AGENT,
     FEED_DOWN,
     IST,
+    MISSED_LINES,
     NO_ANSWER,
     QUIET,
     ROSTER,
@@ -31,15 +34,13 @@ from niftyteam.ensemble import (
     book_std,
     build_ensemble,
     claim_weight,
-    learned_midpoint,
     next_sigma_floor,
 )
 from niftyteam.estimate import (
     LEVEL_RULES,
     apply_family_bias,
     estimate_headline,
-    family_key,
-    fitted_move,
+    fit_move,
     gift_gap_estimate,
     headline_kind,
     level_estimate,
@@ -71,22 +72,81 @@ def tick(root=None) -> int:
     try:
         store.seed_sources(config["sources"])
         stamp = now_ist()
+        restarted = wake(store)
         nifty, bars = _price(store, stamp)
+        if nifty is None:
+            nifty, bars = _price(store, stamp)
+            restarted.append("Nifty")
         gift = _gift(store)
+        if gift is None:
+            gift = _gift(store)
+            restarted.append("GIFT")
         gift_claims = _gift_gap(store, stamp, gift, last_cash_close(bars, stamp))
         soften = bool(gift_claims) or store.meta("gift_open_day") == next_open(stamp).date().isoformat()
         news_claims, news_worked, news_lines = _news(store, config, stamp, nifty, soften)
         pcr_claims, pcr_worked, chain_state = _pcr(store, config, stamp, nifty)
         fii_claims, fii_worked, fii_failed = _fii(store, stamp, nifty)
         level_claims = _levels(store, stamp, nifty)
-        scout_claims, scout_failed = _scout(store, stamp, nifty, soften)
-        claims = news_claims + pcr_claims + fii_claims + level_claims + scout_claims + gift_claims
+        scout_claims, scout_failed, scout_line = _scout(store, stamp, nifty, soften)
+        feed_lines = dict(news_lines)
+        missed_feeds = {key for key, (sentence, _impact) in feed_lines.items() if sentence in MISSED_LINES}
         for claim in level_claims + gift_claims:
             beat = "global" if claim.horizon == "open" else claim.beat
             news_lines[beat] = _prefer(
                 news_lines.get(beat, (NO_ANSWER, 0)),
                 (clip(claim.headline), claim.midpoint),
             )
+        news_claims, news_worked, feed_lines, restarted = _rescue_news(
+            store, config, stamp, nifty, soften, news_claims, news_worked, feed_lines, restarted, missed_feeds,
+        )
+        _fold_feed(news_lines, feed_lines)
+        if chain_state in {"failed", "down"}:
+            wake(store)
+            pcr_claims, pcr_worked, chain_state = _pcr(store, config, stamp, nifty)
+            restarted.append("Options")
+        if fii_failed:
+            wake(store)
+            fii_claims, fii_worked, fii_failed = _fii(store, stamp, nifty)
+            restarted.append("Flows")
+        if scout_failed:
+            wake(store)
+            scout_claims, scout_failed, scout_line = _scout(store, stamp, nifty, soften)
+            restarted.append("Scout")
+        boss = _boss_line(
+            store, restarted, feed_lines, pcr_claims, chain_state,
+            fii_claims, fii_worked, fii_failed, scout_line, nifty is None, gift is None,
+        )
+        voters = agree_to_rescue(boss, _outcomes(
+            store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, scout_line,
+        ))
+        if len(voters) >= 2:
+            if nifty is None:
+                nifty, bars = _price(store, stamp)
+            if gift is None:
+                gift = _gift(store)
+                if gift is not None:
+                    gift_claims = _gift_gap(store, stamp, gift, last_cash_close(bars, stamp))
+            still_feeds = {key for key, (sentence, _impact) in feed_lines.items() if sentence in MISSED_LINES}
+            news_claims, news_worked, feed_lines, restarted = _rescue_news(
+                store, config, stamp, nifty, soften, news_claims, news_worked, feed_lines, restarted, still_feeds,
+            )
+            _fold_feed(news_lines, feed_lines)
+            if chain_state in {"failed", "down"}:
+                wake(store)
+                pcr_claims, pcr_worked, chain_state = _pcr(store, config, stamp, nifty)
+            if fii_failed:
+                wake(store)
+                fii_claims, fii_worked, fii_failed = _fii(store, stamp, nifty)
+            if scout_failed:
+                wake(store)
+                scout_claims, scout_failed, scout_line = _scout(store, stamp, nifty, soften)
+            boss = crew_sentence(voters, _still_names(
+                store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed,
+                scout_line, nifty is None, gift is None,
+            ))
+        else:
+            boss = watch_line(boss, voters)
+        claims = news_claims + pcr_claims + fii_claims + level_claims + scout_claims + gift_claims
         worked = news_worked | pcr_worked | fii_worked | {"scout"}
         if level_claims:
             worked.add("levels")
@@ -96,7 +156,17 @@ def tick(root=None) -> int:
             if pending:
                 store.set_meta(f"ignored:{ensemble.id}", pending)
         _log_roster(
-            store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call,
+            store,
+            stamp,
+            news_lines,
+            pcr_claims,
+            chain_state,
+            fii_claims,
+            fii_worked,
+            fii_failed,
+            ensemble,
+            open_call,
+            boss,
         )
         _score(store, config, stamp, bars)
         _report_limits(
@@ -130,7 +200,72 @@ def _price(store: Store, stamp) -> tuple[float | None, list]:
         return (float(cached) if cached else None), []
 
 
-def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool = False) -> tuple[list[Claim], set[str], dict[str, tuple[str, float]]]:
+def _fold_feed(display: dict, feed_lines: dict) -> None:
+    for key, line in feed_lines.items():
+        if line[0] in MISSED_LINES:
+            display[key] = line
+        else:
+            display[key] = _prefer(display.get(key, (NO_ANSWER, 0)), line)
+
+
+def _rescue_news(store, config, stamp, nifty, soften, claims, worked, lines, restarted, stuck: set[str] | None = None):
+    if stuck is None:
+        stuck = {key for key, (sentence, _impact) in lines.items() if sentence in MISSED_LINES}
+    if not stuck:
+        return claims, worked, lines, restarted
+    wake(store)
+    extra_claims, extra_worked, extra_lines = _news(store, config, stamp, nifty, soften, only=stuck)
+    claims = claims + extra_claims
+    worked = worked | extra_worked
+    for key, line in extra_lines.items():
+        lines[key] = _prefer(lines.get(key, (NO_ANSWER, 0)), line)
+    names = {key: name for key, name in ROSTER}
+    for key in stuck:
+        restarted.append(names[key])
+    return claims, worked, lines, restarted
+
+
+def _boss_line(store, restarted, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, scout_line, price_missing, gift_missing) -> str:
+    still = _still_names(
+        store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed,
+        scout_line, price_missing, gift_missing,
+    )
+    return boss_sentence(restarted, still)
+
+
+def _outcomes(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, scout_line) -> dict[str, str]:
+    lines = _roster_lines(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed)
+    names = {key: name for key, name in ROSTER}
+    outcomes = {names[key]: lines.get(key, (NO_ANSWER, 0))[0] for key, _name in ROSTER if key != "scout"}
+    outcomes["Scout"] = scout_line
+    return outcomes
+
+
+def _still_names(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, scout_line, price_missing, gift_missing) -> list[str]:
+    lines = _roster_lines(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed)
+    names = {key: name for key, name in ROSTER}
+    still = [names[key] for key, (sentence, _impact) in lines.items() if missed(sentence)]
+    if missed(scout_line):
+        still.append("Scout")
+    if price_missing:
+        still.append("Nifty")
+    if gift_missing:
+        still.append("GIFT")
+    return still
+
+
+def _roster_lines(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed) -> dict:
+    lines = dict(feed_lines)
+    fii = _fii_line(store, fii_claims, fii_worked, fii_failed)
+    if fii[0] in MISSED_LINES:
+        lines["flows"] = fii
+    else:
+        lines["flows"] = _prefer(lines.get("flows", (NO_ANSWER, 0)), fii)
+    lines["pcr"] = _pcr_line(pcr_claims, chain_state)
+    return lines
+
+
+def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool = False, only: set[str] | None = None) -> tuple[list[Claim], set[str], dict[str, tuple[str, float]]]:
     hour = stamp.hour
     quiet = hour in set(config.get("quiet_hours") or [])
     last = store.meta("last_tick")
@@ -144,6 +279,8 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
     answered: set[str] = set()
     down: set[str] = set()
     sources = [row for row in store.sources({"rss"}) if row.status in {"active", "probation", "down"}]
+    if only is not None:
+        sources = [row for row in sources if row.beat in only]
     live = [row for row in sources if row.status != "down"]
     for source in sources:
         if source.status == "down":
@@ -184,6 +321,8 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
     lines: dict[str, tuple[str, float]] = {}
     for key, _name in ROSTER:
         if key in {"pcr", "scout"}:
+            continue
+        if only is not None and key not in only:
             continue
         if key in best:
             lines[key] = (clip(best[key].headline), best[key].midpoint)
@@ -304,6 +443,7 @@ def _flow_claim(store, source, stamp, nifty, net: float, day: str, label: str, k
         "shock_key": f"{key}:{direction}",
         "body": f"{label} net {net:,.0f} crore today.",
         "horizon": "session",
+        "driver": net,
     }
     claim = _make_claim(source, guess, f"{key}:{day}", stamp, nifty, store)
     if not store.add_claim(claim):
@@ -386,11 +526,14 @@ LEVEL_FEEDS = {
 def _levels(store: Store, stamp, nifty: float | None) -> list[Claim]:
     day = stamp.date().isoformat()
     claims: list[Claim] = []
-    try:
-        with httpx.Client(timeout=12) as client:
-            prints = {name: fetch_level(client, symbol) for name, symbol in LEVEL_FEEDS.items()}
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        prints = {}
+    prints: dict[str, float | None] = {}
+    for _attempt in range(2):
+        try:
+            with httpx.Client(timeout=12) as client:
+                prints = {name: fetch_level(client, symbol) for name, symbol in LEVEL_FEEDS.items()}
+            break
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            prints = {}
     for name in LEVEL_RULES:
         value = prints.get(name)
         if value is None:
@@ -416,15 +559,10 @@ def _ensure_source(store: Store, source_id: str, beat: str, url: str) -> None:
     store.seed_sources([{"id": source_id, "beat": beat, "kind": "level", "url": url}])
 
 
-def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tuple[list[Claim], bool]:
+def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tuple[list[Claim], bool, str]:
     store.seed_sources([
         {"id": "scout", "beat": "scout", "kind": "scout", "url": "https://html.duckduckgo.com/html/"},
     ])
-    scout = store.source("scout")
-    if scout is not None and scout.status in {"down", "retired"}:
-        scout.status = "active"
-        scout.weight = max(scout.weight, 0.2)
-        store.save_source(scout)
     stories = 0
     new_sources = 0
     claims: list[Claim] = []
@@ -473,7 +611,7 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
         line = QUIET
     store.set_meta("pending_ignored", json.dumps(ignored[:8]))
     store.add_event(stamp.isoformat(), line, 0, agent="scout")
-    return claims, failed
+    return claims, failed, line
 
 
 def _source_for_domain(store: Store, domain: str) -> Source | None:
@@ -600,17 +738,16 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
         claim.residual = actual - claim.midpoint
         claim.status = "scored"
         store.save_claim(claim)
-        if family_key(claim.shock_key):
-            store.add_family_residual(claim.shock_key, claim.residual)
         source = store.source(claim.source_id)
-        if source is not None:
-            apply_score(source, claim.residual, book)
-            if source.id == "scout" and source.status == "retired":
-                source.status = "active"
-                source.weight = max(source.weight, 0.2)
-            store.save_source(source)
-        if claim.driver is not None and source is not None and source.kind == "level":
-            store.add_level_pair(claim.source_id, claim.driver, actual)
+        if claim.horizon != "week":
+            store.add_family_residual(claim.shock_key, claim.residual)
+            if claim.driver is not None and not claim.shock_key.startswith("level:"):
+                store.add_family_pair(claim.shock_key, claim.driver, actual, clean=True)
+            if source is not None:
+                apply_score(source, claim.residual, book)
+                store.save_source(source)
+            if claim.driver is not None and source is not None and source.kind == "level":
+                store.add_level_pair(claim.source_id, claim.driver, actual)
         word = "fell" if actual < 0 else "rose" if actual > 0 else "was flat"
         inside = ""
         ensemble = _ensemble_by_id(store, claim.ensemble_id) if claim.ensemble_id else None
@@ -658,7 +795,7 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
     _retune_floor(store, config)
 
 
-def _log_roster(store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call=None) -> None:
+def _log_roster(store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call=None, boss="Watching. Every agent is working.") -> None:
     lines = dict(news_lines)
     lines["flows"] = _prefer(lines.get("flows", (NO_ANSWER, 0)), _fii_line(store, fii_claims, fii_worked, fii_failed))
     lines["pcr"] = _pcr_line(pcr_claims, chain_state)
@@ -678,6 +815,8 @@ def _log_roster(store, stamp, news_lines, pcr_claims, chain_state, fii_claims, f
         store.add_event(stamp.isoformat(), sentence, impact, agent=key)
     if BOARD_AGENT not in have:
         store.add_event(stamp.isoformat(), board[0], board[1], agent=BOARD_AGENT)
+    if BOSS_AGENT not in have:
+        store.add_event(stamp.isoformat(), boss, 0, agent=BOSS_AGENT)
 
 
 def _prefer(left: tuple[str, float], right: tuple[str, float]) -> tuple[str, float]:
@@ -809,8 +948,6 @@ def _attribute(store: Store, ensemble: Ensemble, group: list[Claim]) -> None:
     for (claim, _weight), point in zip(weighted, points):
         store.add_family_points(claim.shock_key, point)
         store.add_family_coverage(claim.shock_key, inside)
-        if family_key(claim.shock_key) and claim.driver is not None:
-            store.add_family_pair(claim.shock_key, claim.driver, point)
 
 
 def miss_titles(residual: float, sigma: float, titles: list[str]) -> list[str]:
@@ -833,24 +970,15 @@ def _ignored_titles(store: Store, ensemble_id: str) -> list[str]:
 def _make_claim(source: Source, guess: dict, url: str, stamp, nifty: float | None, store: Store | None = None) -> Claim:
     guess = dict(guess)
     key = guess["shock_key"]
-    signal = float(guess["midpoint"])
-    if store is not None and family_key(key) and guess.get("driver") is None:
-        guess["driver"] = signal
-    if store is not None:
-        points_n, points_sum = store.family_points(key)
-        if points_n > 0:
-            guess["midpoint"] = round(learned_midpoint(signal, points_n, points_sum), 1)
-            if points_n < 5:
-                guess["points_high"] = round(float(guess["points_high"]) * 1.4, 1)
-                guess["confidence"] = min(float(guess["confidence"]), 0.25)
-        elif family_key(key):
-            count, total = store.family_stats(key)
+    if store is not None and not key.startswith("level:"):
+        count, total = store.family_stats(key)
+        driver = guess.get("driver")
+        pairs = store.family_pairs(key, clean_only=True) if driver is not None else []
+        if driver is not None and len(pairs) >= 30:
+            fitted = fit_move(pairs, float(driver), float(guess["midpoint"]))
+            guess["midpoint"] = round(max(-150.0, min(150.0, fitted)), 1)
+        elif count > 0:
             guess = apply_family_bias(guess, count, total)
-        if family_key(key):
-            pairs = store.family_pairs(key)
-            if len(pairs) >= 30:
-                fitted = fitted_move(pairs, float(guess.get("driver") or signal), float(guess["midpoint"]))
-                guess["midpoint"] = round(max(-80.0, min(80.0, fitted)), 1)
     horizon = guess.get("horizon") or "session"
     if horizon == "open":
         when = next_open(stamp)

@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS family_pairs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL,
     signal REAL NOT NULL,
-    move REAL NOT NULL
+    move REAL NOT NULL,
+    clean INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -424,18 +425,18 @@ class Store:
         )
         self.conn.commit()
 
-    def add_family_pair(self, key: str, signal: float, move: float) -> None:
+    def add_family_pair(self, key: str, signal: float, move: float, clean: bool = False) -> None:
         self.conn.execute(
-            "INSERT INTO family_pairs (key, signal, move) VALUES (?, ?, ?)",
-            (key, signal, move),
+            "INSERT INTO family_pairs (key, signal, move, clean) VALUES (?, ?, ?, ?)",
+            (key, signal, move, 1 if clean else 0),
         )
         self.conn.commit()
 
-    def family_pairs(self, key: str) -> list[tuple[float, float]]:
-        rows = self.conn.execute(
-            "SELECT signal, move FROM family_pairs WHERE key = ? ORDER BY id",
-            (key,),
-        ).fetchall()
+    def family_pairs(self, key: str, clean_only: bool = False) -> list[tuple[float, float]]:
+        query = "SELECT signal, move FROM family_pairs WHERE key = ?"
+        if clean_only:
+            query += " AND clean = 1"
+        rows = self.conn.execute(query + " ORDER BY id", (key,)).fetchall()
         return [(float(row["signal"]), float(row["move"])) for row in rows]
 
     def add_misses(self, ts: str, titles: list[tuple[str, str, int]]) -> int:
@@ -477,6 +478,7 @@ class Store:
             },
         )
         self._migrate_columns("misses", {"kind": "TEXT NOT NULL DEFAULT ''", "sign": "INTEGER NOT NULL DEFAULT 0"})
+        self._migrate_columns("family_pairs", {"clean": "INTEGER NOT NULL DEFAULT 0"})
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(events)")}
         if "issue" not in cols:
             self.conn.execute("ALTER TABLE events ADD COLUMN issue INTEGER NOT NULL DEFAULT 0")

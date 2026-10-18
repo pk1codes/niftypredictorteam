@@ -9,7 +9,7 @@ from niftyteam.models import Claim, Source
 def claim_weight(claim: Claim, source: Source, shrink_until: int = 20) -> float:
     if source.status in {"retired", "down", "proposal"} or source.weight <= 0:
         return 0.0
-    shrink = (source.n_scored + 2) / (shrink_until + 2)
+    shrink = min(1.0, (source.n_scored + 2) / (shrink_until + 2))
     weight = source.weight * shrink * claim.confidence
     if source.status == "probation":
         weight = min(weight, 0.3)

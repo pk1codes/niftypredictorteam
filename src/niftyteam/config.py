@@ -31,6 +31,7 @@ ROSTER = (
 )
 BOARD_AGENT = "board"
 SCORE_AGENT = "score"
+BOSS_AGENT = "boss"
 QUIET = "Quiet"
 SHUT = "Market shut"
 NO_ANSWER = "No answer"

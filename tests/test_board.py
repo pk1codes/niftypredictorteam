@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, watch_line
 from niftyteam.chart import render_page
 from niftyteam.config import impact_class
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, learned_midpoint, next_sigma_floor
@@ -14,7 +15,7 @@ from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
 from niftyteam.search import parse_gift
 from niftyteam.store import Store
-from niftyteam.tick import _publish, _report_limits, _scout, accuracy_notes, miss_titles
+from niftyteam.tick import _fold_feed, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, miss_titles
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -133,6 +134,7 @@ def test_score_updates_weight_and_chart_colors():
             Event(10, stamp.isoformat(), "Scored an open call. Nifty fell 12.", -12, agent="score"),
             Event(11, (stamp - timedelta(hours=1)).isoformat(), "Quiet", 0, agent="global"),
             Event(12, (stamp - timedelta(hours=1)).isoformat(), "Spread 10", 8, agent="board"),
+            Event(13, stamp.isoformat(), "Watching. Every agent is working.", 0, agent="boss"),
         ],
         25000,
         0,
@@ -174,6 +176,7 @@ def test_score_updates_weight_and_chart_colors():
     assert "Spread 22" in page
     assert "Scored an open call." in page
     assert "Needs a look" not in page
+    assert "Watching. Every agent is working." in page
     assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · mean +8" in page
 
 
@@ -267,9 +270,10 @@ def test_scout_runs_when_other_beats_do_not(tmp_path, monkeypatch):
     <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.example%2Ffpi">FPI selling crosses Rs 52,000 crore in October</a>
     """
     monkeypatch.setattr("niftyteam.tick.search_web", lambda client, query: parse_results(page))
-    claims, failed = _scout(store, datetime(2026, 10, 18, 3, tzinfo=IST), 25000)
+    claims, failed, line = _scout(store, datetime(2026, 10, 18, 3, tzinfo=IST), 25000)
     assert failed is False
     assert len(claims) == 1
+    assert "1 new story, 1 new source" in line
     assert any("1 new story, 1 new source" in event.sentence for event in store.events(5))
     assert agent_line({"scout"}) == "1 agent worked this update."
     assert query_for(0) != query_for(1)
@@ -451,4 +455,84 @@ def test_google_news_keeps_the_publisher():
     assert len(rows) == 1
     assert rows[0]["domain"] == "news.example"
     assert "news.google.com" not in rows[0]["url"]
+
+
+def test_boss_restarts_a_stopped_agent(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    store.seed_sources([
+        {"id": "yahoo-crude", "beat": "crude", "kind": "rss", "url": "https://example.com/oil"},
+        {"id": "nse-pcr", "beat": "pcr", "kind": "pcr", "url": "https://example.com/pcr"},
+    ])
+    crude = store.source("yahoo-crude")
+    crude.status = "down"
+    crude.weight = 0
+    crude.fail_streak = 4
+    store.save_source(crude)
+    options = store.source("nse-pcr")
+    options.status = "retired"
+    options.weight = 0
+    options.n_scored = 30
+    store.save_source(options)
+    assert wake(store) == ["Crude"]
+    crude = store.source("yahoo-crude")
+    assert crude.status == "active"
+    assert crude.weight == 0.4
+    assert crude.fail_streak == 0
+    options = store.source("nse-pcr")
+    assert options.status == "retired"
+    assert options.weight == 0
+    assert boss_sentence([], []) == "Watching. Every agent is working."
+    assert boss_sentence(["Crude"], []) == "Restarted Crude. Working again."
+    assert boss_sentence(["Crude"], ["Crude"]) == "Restarted Crude. Still stuck."
+    assert boss_sentence(["World", "Options"], ["Options"]) == "Restarted World and Options. Options still stuck."
+    store.close()
+
+
+def test_two_agents_agree_before_the_boss_is_restarted():
+    stuck = "Restarted Crude. Still stuck."
+    working = {
+        "World": "Asia higher",
+        "Crude": "No answer",
+        "Rupee": "Quiet",
+        "Policy": "Market shut",
+        "Flows": "Feed down",
+        "Weights": "No answer",
+        "Options": "No answer",
+        "Scout": "Search failed",
+    }
+    assert agree_to_rescue("Watching. Every agent is working.", working) == []
+    assert agree_to_rescue(stuck, {"World": "Asia higher"}) == ["World"]
+    assert watch_line(stuck, ["World"]) == "Restarted Crude. Still stuck. World is watching the boss."
+    assert agree_to_rescue(stuck, working) == ["World"]
+    reports = dict(working)
+    reports["Rupee"] = "Rupee slides"
+    reports["Scout"] = "Scout looked across the web. 1 new story, 1 new source."
+    voters = agree_to_rescue(stuck, reports)
+    assert voters == ["World", "Rupee", "Scout"]
+    assert crew_sentence(voters, ["Crude"]) == "Restarted by World, Rupee, and Scout. Still stuck."
+    assert crew_sentence(["World", "Rupee"], []) == "Restarted by World and Rupee. Working again."
+
+
+def test_brent_headline_does_not_hide_a_down_crude_feed(tmp_path, monkeypatch):
+    store = Store(tmp_path / "board.sqlite")
+    stamp = datetime(2026, 10, 18, 12, tzinfo=IST)
+    feed = {"crude": ("Feed down", 0), "global": ("Quiet", 0)}
+    seen = {}
+
+    def fake_news(store, config, stamp, nifty, soften=False, only=None):
+        seen["only"] = set(only or ())
+        return [], set(), {"crude": ("Oil jumps", -40)}
+
+    monkeypatch.setattr("niftyteam.tick._news", fake_news)
+    _claims, _worked, lines, restarted = _rescue_news(
+        store, {}, stamp, 25000, False, [], set(), dict(feed), [], {"crude"},
+    )
+    assert seen["only"] == {"crude"}
+    assert lines["crude"][0] == "Oil jumps"
+    assert "Crude" in restarted
+    assert "Crude" in _still_names(store, feed, [], "shut", [], set(), False, "Quiet", False, False)
+    display = {"crude": ("Brent rose 1.20 since the last print.", -12)}
+    _fold_feed(display, feed)
+    assert display["crude"][0] == "Feed down"
+    store.close()
 
