@@ -44,6 +44,17 @@ def sessions_ahead(stamp: datetime, count: int = 5) -> datetime:
     return datetime.combine(day, time(15, 30), tzinfo=stamp.tzinfo or IST)
 
 
+def forecast_move(bars: list, score_day: str, anchor: float | None) -> float | None:
+    """Later close minus the level when the forecast was made."""
+    if anchor is None:
+        return None
+    for bar in bars:
+        day, close, _opened = _parts(bar)
+        if day >= score_day:
+            return close - anchor
+    return None
+
+
 def week_move(bars: list, score_day: str, anchor: float | None) -> float | None:
     if anchor is None:
         return None

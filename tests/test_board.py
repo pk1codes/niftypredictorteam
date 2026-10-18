@@ -5,10 +5,10 @@ import pytest
 
 from niftyteam.chart import render_page
 from niftyteam.config import impact_class
-from niftyteam.ensemble import apply_score, build_ensemble, next_sigma_floor
-from niftyteam.estimate import apply_family_bias, estimate_headline, fitted_move, gift_gap_estimate, level_estimate, oi_change_estimate, pcr_estimate
+from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, learned_midpoint, next_sigma_floor
+from niftyteam.estimate import apply_family_bias, estimate_headline, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
 from niftyteam.learn import learning_score, learning_trail
-from niftyteam.horizons import next_open, session_close, sessions_ahead, week_move
+from niftyteam.horizons import forecast_move, next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
@@ -180,6 +180,8 @@ def test_score_updates_weight_and_chart_colors():
 def test_hard_day_families():
     hormuz = estimate_headline("Missile war raises fear of a Hormuz blockade")
     assert hormuz["shock_key"] == "world:crude:down"
+    assert estimate_headline("Federal Reserve shock hits markets")["shock_key"] == "world:global:down"
+    assert estimate_headline("S&P slides on a global selloff")["shock_key"] == "world:global:down"
     assert hormuz["direction"] == "down"
     cyclone = estimate_headline("Severe cyclone nears the Gujarat coast")
     assert cyclone["shock_key"] == "calamity:cyclone"
@@ -214,6 +216,29 @@ def test_family_bias_shifts_the_next_claim():
     guess = {"midpoint": -40, "points_high": 60, "confidence": 0.4, "shock_key": "world:crude:down"}
     shifted = apply_family_bias(guess, 4, 40)
     assert shifted["midpoint"] == pytest.approx(-35)
+
+
+def test_error_is_split_and_reused():
+    points = attributed_points([(-40, 1), (-20, 1)], mu=-30, actual=-50)
+    assert points == pytest.approx([-50, -30])
+    assert learned_midpoint(-40, 4, sum(points[:1]) * 4) == pytest.approx(-45)
+    assert forecast_move([("2026-10-19", 24880, 25000)], "2026-10-19", 25000) == pytest.approx(-120)
+    assert adjust_sigma(30, 10, [(1, 4)]) == pytest.approx(34.5)
+    assert adjust_sigma(30, 10, [(4, 1)]) == pytest.approx(27)
+    kind = headline_kind("Cyclone shuts the Gujarat coast")
+    assert promoted_miss("Cyclone shuts the Gujarat coast", []) is None
+    again = promoted_miss("Cyclone shuts the Gujarat coast", [(kind, -1)])
+    assert again["shock_key"] == f"miss:{kind}"
+    assert again["direction"] == "down"
+    assert promoted_miss("Cyclone shuts the Gujarat coast", [(kind, -1), (kind, 1)]) is None
+
+
+def test_family_slope_after_30_pairs(tmp_path):
+    store = Store(tmp_path / "board.sqlite")
+    for _ in range(30):
+        store.add_family_pair("world:crude:down", 10, -20)
+    assert fitted_move(store.family_pairs("world:crude:down"), 10, -65) == pytest.approx(-20)
+    store.close()
 
 
 def test_week_score_waits_five_sessions():

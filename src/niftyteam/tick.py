@@ -24,18 +24,38 @@ from niftyteam.config import (
     load_dotenv,
     now_ist,
 )
-from niftyteam.ensemble import apply_score, book_std, build_ensemble, next_sigma_floor
+from niftyteam.ensemble import (
+    adjust_sigma,
+    apply_score,
+    attributed_points,
+    book_std,
+    build_ensemble,
+    claim_weight,
+    learned_midpoint,
+    next_sigma_floor,
+)
 from niftyteam.estimate import (
     LEVEL_RULES,
     apply_family_bias,
     estimate_headline,
     family_key,
+    fitted_move,
     gift_gap_estimate,
+    headline_kind,
     level_estimate,
     oi_change_estimate,
     pcr_estimate,
+    promoted_miss,
 )
-from niftyteam.horizons import day_open, last_cash_close, next_open, session_close, session_move, sessions_ahead, week_move
+from niftyteam.horizons import (
+    day_open,
+    forecast_move,
+    last_cash_close,
+    next_open,
+    session_close,
+    sessions_ahead,
+    week_move,
+)
 from niftyteam.models import Claim, Ensemble, Source
 from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
 from niftyteam.scout import query_for, scout_sentence, search_web
@@ -421,9 +441,11 @@ def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tu
         guess = estimate_headline(item["title"])
         if guess is None:
             title = item.get("title") or ""
-            if title:
-                ignored.append(title)
-            continue
+            guess = promoted_miss(title, store.miss_history()) if title else None
+            if guess is None:
+                if title:
+                    ignored.append(title)
+                continue
         guess = dict(guess)
         guess["confidence"] = min(0.2, guess["confidence"] * 0.5)
         if soften:
@@ -524,6 +546,16 @@ def _one_call(store, config, claims: list[Claim], stamp, anchor: float | None, h
     built = build_ensemble(claims, sources, floor)
     if built is None:
         return None
+    seen: set[str] = set()
+    records = []
+    for claim in claims:
+        if claim.shock_key in seen:
+            continue
+        seen.add(claim.shock_key)
+        inside, outside = store.family_coverage(claim.shock_key)
+        if inside or outside:
+            records.append((inside, outside))
+    built["sigma"] = adjust_sigma(built["sigma"], floor, records)
     item = Ensemble(
         id=uuid4().hex[:12],
         ts=stamp.isoformat(),
@@ -561,7 +593,7 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
             if actual is None:
                 continue
         else:
-            actual = session_move(bars, score_day)
+            actual = forecast_move(bars, score_day, claim.nifty_level)
             if actual is None:
                 continue
         claim.actual_move = actual
@@ -577,7 +609,7 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
                 source.status = "active"
                 source.weight = max(source.weight, 0.2)
             store.save_source(source)
-        if claim.driver is not None:
+        if claim.driver is not None and source is not None and source.kind == "level":
             store.add_level_pair(claim.source_id, claim.driver, actual)
         word = "fell" if actual < 0 else "rose" if actual > 0 else "was flat"
         inside = ""
@@ -607,16 +639,21 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
                 continue
             ensemble.actual = opened - ensemble.nifty_level
         else:
-            move = session_move(bars, score_day)
+            move = forecast_move(bars, score_day, ensemble.nifty_level)
             if move is None:
                 continue
             ensemble.actual = move
         ensemble.residual = ensemble.actual - ensemble.mu
         store.save_ensemble(ensemble)
+        _attribute(store, ensemble, group)
         if ensemble.horizon != "week":
+            sign = -1 if ensemble.residual < 0 else 1 if ensemble.residual > 0 else 0
             titles = miss_titles(ensemble.residual, ensemble.sigma, _ignored_titles(store, ensemble.id))
             if titles:
-                store.add_misses(stamp.isoformat(), titles)
+                store.add_misses(
+                    stamp.isoformat(),
+                    [(title, headline_kind(title), sign) for title in titles],
+                )
                 store.add_event(stamp.isoformat(), f"Kept {len(titles)} missed stories.", ensemble.residual, agent="score")
     _retune_floor(store, config)
 
@@ -751,6 +788,31 @@ def _print_board(store: Store) -> None:
         print(f"{event.ts[11:16]}  {event.sentence}  {event.impact:+.0f}")
 
 
+def _attribute(store: Store, ensemble: Ensemble, group: list[Claim]) -> None:
+    if ensemble.actual is None:
+        return
+    weighted = []
+    for claim in group:
+        source = store.source(claim.source_id)
+        if source is None:
+            continue
+        weight = claim_weight(claim, source)
+        if weight <= 0:
+            continue
+        weighted.append((claim, weight))
+    if not weighted:
+        return
+    points = attributed_points([(claim.midpoint, weight) for claim, weight in weighted], ensemble.mu, ensemble.actual)
+    claim_errors = [ensemble.actual - claim.midpoint for claim, _weight in weighted]
+    disagree = min(claim_errors) < 0 < max(claim_errors)
+    inside = abs(ensemble.actual - ensemble.mu) <= ensemble.sigma and not disagree
+    for (claim, _weight), point in zip(weighted, points):
+        store.add_family_points(claim.shock_key, point)
+        store.add_family_coverage(claim.shock_key, inside)
+        if family_key(claim.shock_key) and claim.driver is not None:
+            store.add_family_pair(claim.shock_key, claim.driver, point)
+
+
 def miss_titles(residual: float, sigma: float, titles: list[str]) -> list[str]:
     if sigma <= 0 or abs(residual) <= 1.5 * sigma:
         return []
@@ -770,10 +832,25 @@ def _ignored_titles(store: Store, ensemble_id: str) -> list[str]:
 
 def _make_claim(source: Source, guess: dict, url: str, stamp, nifty: float | None, store: Store | None = None) -> Claim:
     guess = dict(guess)
-    key = family_key(guess["shock_key"])
-    if store is not None and key:
-        count, total = store.family_stats(key)
-        guess = apply_family_bias(guess, count, total)
+    key = guess["shock_key"]
+    signal = float(guess["midpoint"])
+    if store is not None and family_key(key) and guess.get("driver") is None:
+        guess["driver"] = signal
+    if store is not None:
+        points_n, points_sum = store.family_points(key)
+        if points_n > 0:
+            guess["midpoint"] = round(learned_midpoint(signal, points_n, points_sum), 1)
+            if points_n < 5:
+                guess["points_high"] = round(float(guess["points_high"]) * 1.4, 1)
+                guess["confidence"] = min(float(guess["confidence"]), 0.25)
+        elif family_key(key):
+            count, total = store.family_stats(key)
+            guess = apply_family_bias(guess, count, total)
+        if family_key(key):
+            pairs = store.family_pairs(key)
+            if len(pairs) >= 30:
+                fitted = fitted_move(pairs, float(guess.get("driver") or signal), float(guess["midpoint"]))
+                guess["midpoint"] = round(max(-80.0, min(80.0, fitted)), 1)
     horizon = guess.get("horizon") or "session"
     if horizon == "open":
         when = next_open(stamp)

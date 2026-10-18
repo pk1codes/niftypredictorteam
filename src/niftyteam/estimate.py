@@ -101,7 +101,7 @@ def estimate_headline(title: str) -> dict | None:
 
     if re.search(r"\b(s&p|dow|nasdaq|wall street|nikkei|hang seng|vix)\b", text):
         if re.search(r"\b(fall|falls|slide|slump|selloff|sink|fear)\b", text):
-            return _band("global", "down", 20, 50, 0.3, raw, "global:down")
+            return _band("global", "down", 20, 50, 0.3, raw, "world:global:down")
         if re.search(r"\b(rally|gain|gains|rise|record)\b", text):
             return _band("global", "up", 15, 40, 0.28, raw, "global:up")
 
@@ -249,6 +249,35 @@ def _heavyweight(text: str) -> str | None:
     return None
 
 
+_KIND_STOP = {
+    "after",
+    "from",
+    "into",
+    "market",
+    "nifty",
+    "over",
+    "that",
+    "this",
+    "with",
+}
+
+
+def headline_kind(title: str) -> str:
+    words = [word for word in re.findall(r"[a-z]{4,}", title.lower()) if word not in _KIND_STOP]
+    return " ".join(words[:3])
+
+
+def promoted_miss(title: str, earlier: list[tuple[str, int]]) -> dict | None:
+    kind = headline_kind(title)
+    if not kind:
+        return None
+    signs = [sign for old, sign in earlier if old == kind and sign != 0]
+    if len(signs) < 1 or any(sign != signs[0] for sign in signs):
+        return None
+    direction = "down" if signs[0] < 0 else "up"
+    return _band("global", direction, 15, 50, 0.15, title, f"miss:{kind}")
+
+
 def family_key(shock_key: str) -> str | None:
     if shock_key.startswith(("world:", "calamity:", "find:")):
         return shock_key
@@ -285,9 +314,12 @@ def _world(text: str, raw: str) -> dict | None:
     chips = re.search(r"\b(taiwan|chip ban|chips ban|semiconductor)\b", text) and re.search(
         r"\b(ban|curb|curbs|restriction|restrictions)\b", text
     )
+    fed = re.search(r"\b(fed|federal reserve)\b", text) and re.search(
+        r"\b(hike|hikes|shock|surprise|emergency)\b", text
+    )
     if energy and geo:
         return _band("crude", "down", 40, 90, 0.25, raw, "world:crude:down")
-    if geo or chips:
+    if geo or chips or fed:
         return _band("global", "down", 25, 70, 0.25, raw, "world:global:down")
     return None
 

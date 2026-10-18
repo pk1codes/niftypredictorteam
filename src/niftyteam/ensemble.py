@@ -67,6 +67,32 @@ def _agreed_move(shocks: list[dict]) -> tuple[float, float] | None:
     return mu, abs(mu) * 0.6
 
 
+def attributed_points(rows: list[tuple[float, float]], mu: float, actual: float) -> list[float]:
+    total = sum(weight for _mid, weight in rows)
+    if total <= 0:
+        return [mid for mid, _weight in rows]
+    error = actual - mu
+    return [mid + error * (weight / total) for mid, weight in rows]
+
+
+def learned_midpoint(prior: float, n: int, points_sum: float) -> float:
+    if n <= 0:
+        return prior
+    shrink = n / (n + 4)
+    learned = points_sum / n
+    return (1 - shrink) * prior + shrink * learned
+
+
+def adjust_sigma(sigma: float, floor: float, records: list[tuple[int, int]]) -> float:
+    if not records:
+        return sigma
+    if any(outside > inside for inside, outside in records):
+        return min(sigma * 1.15, 200)
+    if all(inside >= 3 and inside > outside for inside, outside in records):
+        return max(sigma * 0.9, floor)
+    return sigma
+
+
 def apply_score(source: Source, residual: float, book_std: float) -> str | None:
     """Update a source from one residual. Return a log sentence when its status changes."""
     source.n_scored += 1

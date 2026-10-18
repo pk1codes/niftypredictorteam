@@ -98,6 +98,12 @@ CREATE TABLE IF NOT EXISTS misses (
     ts TEXT NOT NULL,
     title TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS family_pairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL,
+    signal REAL NOT NULL,
+    move REAL NOT NULL
+);
 """
 
 
@@ -377,13 +383,74 @@ class Store:
         )
         self.conn.commit()
 
-    def add_misses(self, ts: str, titles: list[str]) -> int:
+    def family_points(self, key: str) -> tuple[int, float]:
+        row = self.conn.execute(
+            "SELECT points_n, points_sum FROM families WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return 0, 0.0
+        return int(row["points_n"] or 0), float(row["points_sum"] or 0)
+
+    def add_family_points(self, key: str, points: float) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO families (key, points_n, points_sum) VALUES (?, 1, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                points_n = points_n + 1,
+                points_sum = points_sum + excluded.points_sum
+            """,
+            (key, points),
+        )
+        self.conn.commit()
+
+    def family_coverage(self, key: str) -> tuple[int, int]:
+        row = self.conn.execute(
+            "SELECT inside_n, outside_n FROM families WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row["inside_n"] or 0), int(row["outside_n"] or 0)
+
+    def add_family_coverage(self, key: str, inside: bool) -> None:
+        column = "inside_n" if inside else "outside_n"
+        self.conn.execute(
+            f"""
+            INSERT INTO families (key, {column}) VALUES (?, 1)
+            ON CONFLICT(key) DO UPDATE SET {column} = {column} + 1
+            """,
+            (key,),
+        )
+        self.conn.commit()
+
+    def add_family_pair(self, key: str, signal: float, move: float) -> None:
+        self.conn.execute(
+            "INSERT INTO family_pairs (key, signal, move) VALUES (?, ?, ?)",
+            (key, signal, move),
+        )
+        self.conn.commit()
+
+    def family_pairs(self, key: str) -> list[tuple[float, float]]:
+        rows = self.conn.execute(
+            "SELECT signal, move FROM family_pairs WHERE key = ? ORDER BY id",
+            (key,),
+        ).fetchall()
+        return [(float(row["signal"]), float(row["move"])) for row in rows]
+
+    def add_misses(self, ts: str, titles: list[tuple[str, str, int]]) -> int:
         self.conn.executemany(
-            "INSERT INTO misses (ts, title) VALUES (?, ?)",
-            [(ts, title) for title in titles],
+            "INSERT INTO misses (ts, title, kind, sign) VALUES (?, ?, ?, ?)",
+            [(ts, title, kind, sign) for title, kind, sign in titles],
         )
         self.conn.commit()
         return len(titles)
+
+    def miss_history(self) -> list[tuple[str, int]]:
+        rows = self.conn.execute(
+            "SELECT kind, sign FROM misses WHERE kind != '' AND sign != 0"
+        ).fetchall()
+        return [(row["kind"], int(row["sign"])) for row in rows]
 
     def miss_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM misses").fetchone()
@@ -400,6 +467,16 @@ class Store:
         self._migrate_pcr()
         self._migrate_columns("claims", {"horizon": "TEXT NOT NULL DEFAULT 'session'", "driver": "REAL"})
         self._migrate_columns("ensembles", {"horizon": "TEXT NOT NULL DEFAULT 'session'"})
+        self._migrate_columns(
+            "families",
+            {
+                "points_n": "INTEGER NOT NULL DEFAULT 0",
+                "points_sum": "REAL NOT NULL DEFAULT 0",
+                "inside_n": "INTEGER NOT NULL DEFAULT 0",
+                "outside_n": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
+        self._migrate_columns("misses", {"kind": "TEXT NOT NULL DEFAULT ''", "sign": "INTEGER NOT NULL DEFAULT 0"})
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(events)")}
         if "issue" not in cols:
             self.conn.execute("ALTER TABLE events ADD COLUMN issue INTEGER NOT NULL DEFAULT 0")
