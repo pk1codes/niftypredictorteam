@@ -32,7 +32,15 @@
   svg { width: 100%; height: auto; display: block; }
   .roster { margin-top: 18px; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }
   .roster-head { display: flex; justify-content: space-between; padding: 12px 14px 4px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }
+  .matters { display: grid; gap: 10px; margin: 0 0 16px; }
+  .matters section { background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 10px 14px 6px; }
+  .matters h2 { margin: 0 0 6px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }
+  .matter { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid #f0ebe3; }
+  .matter.bad .line { color: #8a1c1c; }
+  .matter.idle .line { color: #8a5a00; }
   .agent { display: flex; gap: 10px; align-items: baseline; padding: 8px 14px; border-top: 1px solid #f0ebe3; }
+  .agent.idle { background: #fff6e8; }
+  .agent.bad { background: #fdecea; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #b9b2a6; flex: none; }
   .dot.ok { background: #0c7a3a; }
   .dot.bad { background: #c47b00; }
@@ -57,29 +65,34 @@
 <main>
   <h1>Nifty board</h1>
   <p class="sub">Nifty 23,146</p>
-  <div class='status' id='status' data-last='2026-10-18T22:15:22.432389+05:30'><span class='light on' id='light'></span><span class='state' id='state'>Running</span><span id='last-run'>Last run 18 Oct 22:15</span><span id='next-run'>Next update</span></div>
+  <div class='status' id='status' data-last='2026-10-18T22:32:50.038440+05:30'><span class='light on' id='light'></span><span class='state' id='state'>Running</span><span id='last-run'>Last run 18 Oct 22:32</span><span id='next-run'>Next update</span></div>
   <div class="stats">
-    <div><span>Open</span><strong class="minus">-61</strong></div>
-    <div><span>Session</span><strong class="plus">+24</strong></div>
-    <div><span>Spread</span><strong>30</strong></div>
-    <div><span>Scored</span><strong>0</strong></div>
     <div><span>GIFT Nifty</span><strong class='minus'>23,085 -9.5</strong></div>
     <div><span>FII net</span><strong class='plus'>+1,166 cr</strong></div>
   </div>
   <p class='note'>Early curve. 0 scored forecasts. The error bell settles after a few dozen checks.</p>
+  <div class='matters'><section><h2>Moving the forecast</h2><p class='matter'><span class='line'>No strong event this hour.</span></p></section><section><h2>Quiet or stuck</h2><div class='matter idle'><span class='name'>World</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Crude</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Rupee</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Policy</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Flows</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Weights</span><span class='line'>Quiet</span></div>
+<div class='matter idle'><span class='name'>Options</span><span class='line'>Market shut</span></div>
+<div class='matter idle'><span class='name'>Scout</span><span class='line'>Quiet</span></div></section></div>
   <div class="charts">
     <figure><svg viewBox='0 0 400 224' role='img' aria-label='Forecast' style='font-family:ui-sans-serif,sans-serif'><line x1='28' y1='49.5' x2='372' y2='49.5' stroke='#f3efe8'/><line x1='28' y1='83.0' x2='372' y2='83.0' stroke='#f3efe8'/><line x1='28' y1='116.5' x2='372' y2='116.5' stroke='#f3efe8'/><line x1='28' y1='150' x2='372' y2='150' stroke='#e4ddd2'/><polygon points='46.4,150 46.4,148.5 49.6,148.2 52.8,147.9 56.0,147.4 59.2,146.9 62.4,146.4 65.6,145.7 68.8,145.0 72.0,144.1 75.2,143.1 78.4,142.0 81.6,140.8 84.8,139.3 88.0,137.8 91.2,136.0 94.4,134.0 97.6,131.9 100.8,129.5 104.0,126.9 107.2,124.1 110.4,121.0 113.6,117.7 116.8,114.2 120.0,110.5 123.2,106.5 126.4,102.3 129.6,97.9 132.8,93.4 136.0,88.7 139.2,83.8 142.4,78.8 145.6,73.8 148.8,68.7 152.0,63.7 155.2,58.6 158.4,53.7 161.6,48.9 164.8,44.2 168.0,39.8 171.2,35.6 174.4,31.7 177.6,28.2 180.8,25.1 184.0,22.4 187.2,20.1 190.4,18.3 193.6,17.0 196.8,16.3 200.0,16.0 203.2,16.3 206.4,17.0 209.6,18.3 212.8,20.1 216.0,22.4 219.2,25.1 222.4,28.2 225.6,31.7 228.8,35.6 232.0,39.8 235.2,44.2 238.4,48.9 241.6,53.7 244.8,58.6 248.0,63.7 251.2,68.7 254.4,73.8 257.6,78.8 260.8,83.8 264.0,88.7 267.2,93.4 270.4,97.9 273.6,102.3 276.8,106.5 280.0,110.5 283.2,114.2 286.4,117.7 289.6,121.0 292.8,124.1 296.0,126.9 299.2,129.5 302.4,131.9 305.6,134.0 308.8,136.0 312.0,137.8 315.2,139.3 318.4,140.8 321.6,142.0 324.8,143.1 328.0,144.1 331.2,145.0 334.4,145.7 337.6,146.4 340.8,146.9 344.0,147.4 347.2,147.9 350.4,148.2 353.6,148.5 353.6,150' fill='#6b3fa0' fill-opacity='0.12' stroke='none'/><polyline fill='none' stroke='#6b3fa0' stroke-width='2' points='46.4,148.5 49.6,148.2 52.8,147.9 56.0,147.4 59.2,146.9 62.4,146.4 65.6,145.7 68.8,145.0 72.0,144.1 75.2,143.1 78.4,142.0 81.6,140.8 84.8,139.3 88.0,137.8 91.2,136.0 94.4,134.0 97.6,131.9 100.8,129.5 104.0,126.9 107.2,124.1 110.4,121.0 113.6,117.7 116.8,114.2 120.0,110.5 123.2,106.5 126.4,102.3 129.6,97.9 132.8,93.4 136.0,88.7 139.2,83.8 142.4,78.8 145.6,73.8 148.8,68.7 152.0,63.7 155.2,58.6 158.4,53.7 161.6,48.9 164.8,44.2 168.0,39.8 171.2,35.6 174.4,31.7 177.6,28.2 180.8,25.1 184.0,22.4 187.2,20.1 190.4,18.3 193.6,17.0 196.8,16.3 200.0,16.0 203.2,16.3 206.4,17.0 209.6,18.3 212.8,20.1 216.0,22.4 219.2,25.1 222.4,28.2 225.6,31.7 228.8,35.6 232.0,39.8 235.2,44.2 238.4,48.9 241.6,53.7 244.8,58.6 248.0,63.7 251.2,68.7 254.4,73.8 257.6,78.8 260.8,83.8 264.0,88.7 267.2,93.4 270.4,97.9 273.6,102.3 276.8,106.5 280.0,110.5 283.2,114.2 286.4,117.7 289.6,121.0 292.8,124.1 296.0,126.9 299.2,129.5 302.4,131.9 305.6,134.0 308.8,136.0 312.0,137.8 315.2,139.3 318.4,140.8 321.6,142.0 324.8,143.1 328.0,144.1 331.2,145.0 334.4,145.7 337.6,146.4 340.8,146.9 344.0,147.4 347.2,147.9 350.4,148.2 353.6,148.5'/><line x1='227.5' y1='142' x2='227.5' y2='155' stroke='#0c7a3a' stroke-width='2'/><line x1='137.7' y1='142' x2='137.7' y2='155' stroke='#b86e00' stroke-width='2'/><line x1='263.0' y1='142' x2='263.0' y2='155' stroke='#1d4e89' stroke-width='2'/><line x1='200.0' y1='142' x2='200.0' y2='155' stroke='#6b3fa0' stroke-width='2' stroke-dasharray='3 3'/><text x='28.0' y='168.0' text-anchor='start' font-size='10' fill='#746c62'>23,010</text><text x='114.0' y='168.0' text-anchor='middle' font-size='10' fill='#746c62'>23,069</text><text x='200.0' y='168.0' text-anchor='middle' font-size='10' fill='#746c62'>23,127</text><text x='286.0' y='168.0' text-anchor='middle' font-size='10' fill='#746c62'>23,186</text><text x='372.0' y='168.0' text-anchor='end' font-size='10' fill='#746c62'>23,244</text><circle cx='32' cy='189' r='3.5' fill='#0c7a3a'/><text x='42' y='192' font-size='12' fill='#1c1915'>Spot 23,146</text><circle cx='32' cy='207' r='3.5' fill='#b86e00'/><text x='42' y='210' font-size='12' fill='#1c1915'>GIFT 23,085</text><circle cx='222' cy='189' r='3.5' fill='#1d4e89'/><text x='232' y='192' font-size='12' fill='#1c1915'>Next +24</text><circle cx='222' cy='207' r='3.5' fill='#6b3fa0'/><text x='232' y='210' font-size='12' fill='#1c1915'>Mean 23,127</text></svg><figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
     <figure><svg viewBox='0 0 400 220'><text x='20' y='110' fill='#746c62'>No error curve yet.</text></svg><figcaption>Actual minus mean, once scores exist.</figcaption></figure>
   </div>
-  <section class='roster'><div class='roster-head'><span>Agents</span><span>8 of 8</span></div><div class='agent'><span class='dot idle'></span><span class='name'>World</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Crude</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Rupee</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Policy</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Flows</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Weights</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Options</span><span class='line'>Market shut</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Scout</span><span class='line'>Quiet</span></div>
-<div class='agent'><span class='dot idle'></span><span class='name'>Board</span><span class='line'>Quiet</span></div><p class='trail'>22:07 · 8 of 8 · mean —</p>
+  <section class='roster'><div class='roster-head'><span>Agents</span><span>8 of 8</span></div><div class='agent idle'><span class='dot idle'></span><span class='name'>World</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Crude</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Rupee</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Policy</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Flows</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Weights</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Options</span><span class='line'>Market shut</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Scout</span><span class='line'>Quiet</span></div>
+<div class='agent idle'><span class='dot idle'></span><span class='name'>Board</span><span class='line'>Quiet</span></div><p class='trail'>22:15 · 8 of 8 · mean —</p>
+<p class='trail'>22:07 · 8 of 8 · mean —</p>
 <p class='trail'>21:48 · 8 of 8 · mean —</p>
 <p class='trail'>21:26 · 8 of 8 · mean —</p>
 <p class='trail'>21:01 · 8 of 8 · mean +24</p>
