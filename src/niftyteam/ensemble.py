@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import math
+from collections import defaultdict
+
+from niftyteam.models import Claim, Source
+
+
+def claim_weight(claim: Claim, source: Source, shrink_until: int = 20) -> float:
+    if source.status in {"retired", "down", "proposal"} or source.weight <= 0:
+        return 0.0
+    shrink = (source.n_scored + 2) / (shrink_until + 2)
+    weight = source.weight * shrink * claim.confidence
+    if source.status == "probation":
+        weight = min(weight, 0.3)
+    if source.kind == "pcr" and source.n_scored < shrink_until:
+        weight *= 0.15
+    return weight
+
+
+def build_ensemble(claims: list[Claim], sources: dict[str, Source], sigma_floor: float) -> dict | None:
+    grouped: dict[str, list[tuple[Claim, float]]] = defaultdict(list)
+    for claim in claims:
+        source = sources.get(claim.source_id)
+        if source is None:
+            continue
+        weight = claim_weight(claim, source)
+        if weight <= 0:
+            continue
+        grouped[claim.shock_key].append((claim, weight))
+    if not grouped:
+        return None
+
+    shocks = []
+    for key, rows in grouped.items():
+        total = sum(weight for _, weight in rows)
+        midpoint = sum(claim.midpoint * weight for claim, weight in rows) / total
+        band = max(claim.points_high - claim.points_low for claim, _ in rows) / 2
+        shocks.append({"key": key, "x": midpoint, "w": total, "band": band, "ids": [c.id for c, _ in rows]})
+
+    weight_sum = sum(shock["w"] for shock in shocks)
+    mu = sum(shock["x"] * shock["w"] for shock in shocks) / weight_sum
+    var = sum(shock["w"] * (shock["x"] - mu) ** 2 for shock in shocks) / weight_sum
+    sigma = math.sqrt(var)
+    if len(shocks) == 1:
+        sigma = max(sigma, shocks[0]["band"])
+    sigma = max(sigma, sigma_floor)
+    return {"mu": mu, "sigma": sigma, "n_shocks": len(shocks), "ids": [i for shock in shocks for i in shock["ids"]]}
+
+
+def apply_score(source: Source, residual: float, book_std: float) -> str | None:
+    """Update a source from one residual. Return a log sentence when its status changes."""
+    source.n_scored += 1
+    source.residual_sum += residual
+    source.residual_sq_sum += residual * residual
+    mean = source.residual_sum / source.n_scored
+    typical = max(book_std, 15)
+    if abs(residual) <= typical:
+        source.weight = min(2.0, source.weight * 1.05)
+    else:
+        source.weight = max(0.05, source.weight * 0.9)
+    if source.n_scored >= 30 and book_std > 0 and abs(mean) > 1.5 * book_std:
+        source.status = "retired"
+        source.weight = 0
+        return f"{source.id} retired. Its calls stayed biased."
+    return None
+
+
+def next_sigma_floor(floor: float, covered_flags: list[bool]) -> float:
+    if len(covered_flags) < 30:
+        return floor
+    coverage = sum(1 for flag in covered_flags if flag) / len(covered_flags)
+    if coverage < 0.68:
+        return min(floor * 1.1, 200)
+    if coverage > 0.68:
+        return max(floor * 0.9, 8)
+    return floor
+
+
+def book_std(residuals: list[float]) -> float:
+    if len(residuals) < 2:
+        return 0.0
+    mean = sum(residuals) / len(residuals)
+    var = sum((item - mean) ** 2 for item in residuals) / len(residuals)
+    return math.sqrt(var)

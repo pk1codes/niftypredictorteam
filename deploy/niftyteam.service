@@ -1,0 +1,8 @@
+[Unit]
+Description=Nifty board hourly tick
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/niftypredictorteam
+Environment=PYTHONPATH=%h/Desktop/niftypredictorteam/src
+ExecStart=%h/Desktop/niftypredictorteam/.venv/bin/python -m niftyteam tick

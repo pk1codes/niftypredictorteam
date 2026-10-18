@@ -1,0 +1,44 @@
+name: tick
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nifty-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Tick
+        env:
+          PYTHONPATH: src
+        run: python -m niftyteam tick
+
+      - name: Publish page
+        run: |
+          mkdir -p docs
+          cp data/chart.html docs/index.html
+          touch docs/.nojekyll
+
+      - name: Commit board
+        run: |
+          git add data/niftyteam.sqlite docs/index.html docs/.nojekyll
+          git diff --cached --quiet && exit 0
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update the board"
+          git push

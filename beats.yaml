@@ -1,0 +1,121 @@
+quiet_hours: [0, 1, 2, 3, 4]
+session:
+  start: "09:15"
+  end: "15:30"
+first_window_hours: 36
+sigma_floor: 30
+shrink_until: 20
+heavyweights:
+  - Reliance
+  - HDFC Bank
+  - ICICI Bank
+  - Infosys
+  - TCS
+  - Bharti Airtel
+  - ITC
+  - L&T
+  - Hindustan Unilever
+  - SBI
+allowlist:
+  - economictimes.indiatimes.com
+  - www.moneycontrol.com
+  - moneycontrol.com
+  - www.livemint.com
+  - livemint.com
+  - www.business-standard.com
+  - business-standard.com
+  - www.rbi.org.in
+  - rbi.org.in
+  - pib.gov.in
+  - www.pib.gov.in
+  - www.federalreserve.gov
+  - www.eia.gov
+sources:
+  - id: yahoo-gspc
+    beat: global
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US"
+  - id: yahoo-n225
+    beat: global
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EN225&region=US&lang=en-US"
+  - id: yahoo-hsi
+    beat: global
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EHSI&region=US&lang=en-US"
+  - id: yahoo-vix
+    beat: global
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EVIX&region=US&lang=en-US"
+  - id: fed-press
+    beat: global
+    kind: rss
+    url: "https://www.federalreserve.gov/feeds/press_monetary.xml"
+  - id: et-commodities
+    beat: crude
+    kind: rss
+    url: "https://economictimes.indiatimes.com/markets/commodities/rssfeeds/1808152121.cms"
+  - id: eia-press
+    beat: crude
+    kind: rss
+    url: "https://www.eia.gov/rss/press_rss.xml"
+  - id: yahoo-crude
+    beat: crude
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=CL%3DF&region=US&lang=en-US"
+  - id: et-forex
+    beat: fx
+    kind: rss
+    url: "https://economictimes.indiatimes.com/markets/forex/rssfeeds/1150221130.cms"
+  - id: yahoo-inr
+    beat: fx
+    kind: rss
+    url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=INR%3DX&region=US&lang=en-US"
+  - id: rbi-press
+    beat: policy
+    kind: rss
+    url: "https://www.rbi.org.in/pressreleases_rss.xml"
+  - id: et-economy
+    beat: policy
+    kind: rss
+    url: "https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms"
+  - id: pib-national
+    beat: policy
+    kind: rss
+    url: "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3"
+  - id: et-markets
+    beat: flows
+    kind: rss
+    url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+  - id: mc-markets
+    beat: flows
+    kind: rss
+    url: "https://www.moneycontrol.com/rss/marketreports.xml"
+  - id: mc-economy
+    beat: flows
+    kind: rss
+    url: "https://www.moneycontrol.com/rss/economy.xml"
+  - id: mint-markets
+    beat: flows
+    kind: rss
+    url: "https://www.livemint.com/rss/markets"
+  - id: bs-markets
+    beat: flows
+    kind: rss
+    url: "https://www.business-standard.com/rss/markets-106.rss"
+  - id: fii-dii
+    beat: flows
+    kind: fii
+    url: "https://www.nseindia.com/api/fiidiiTradeReact"
+  - id: et-stocks
+    beat: weights
+    kind: rss
+    url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+  - id: mc-results
+    beat: weights
+    kind: rss
+    url: "https://www.moneycontrol.com/rss/results.xml"
+  - id: nse-pcr
+    beat: pcr
+    kind: pcr
+    url: "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"

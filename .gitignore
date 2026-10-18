@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/*
+!data/niftyteam.sqlite
+.env
+firebase-config.js
+functions/niftyteam/
+functions/beats.yaml

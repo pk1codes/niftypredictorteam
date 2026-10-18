@@ -1,0 +1,794 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta
+from uuid import uuid4
+
+import httpx
+
+from niftyteam.chart import render_page
+from niftyteam.config import (
+    BOARD_AGENT,
+    FEED_DOWN,
+    IST,
+    NO_ANSWER,
+    QUIET,
+    ROSTER,
+    SEARCH_FAILED,
+    SHUT,
+    STATUS_LINES,
+    clip,
+    find_root,
+    impact_text,
+    load_config,
+    load_dotenv,
+    now_ist,
+)
+from niftyteam.ensemble import apply_score, book_std, build_ensemble, next_sigma_floor
+from niftyteam.estimate import (
+    LEVEL_RULES,
+    estimate_headline,
+    gift_gap_estimate,
+    level_estimate,
+    oi_change_estimate,
+    pcr_estimate,
+)
+from niftyteam.horizons import day_open, last_cash_close, next_open, session_close, session_move
+from niftyteam.models import Claim, Ensemble, Source
+from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
+from niftyteam.scout import query_for, scout_sentence, search_web
+from niftyteam.search import domain_of, fetch_feed, fetch_gift, fetch_level, fetch_price, fresh, hrefs
+from niftyteam.store import Store
+
+
+def tick(root=None) -> int:
+    root = root or find_root()
+    load_dotenv(root)
+    config = load_config(root)
+    store = Store(root / "data" / "niftyteam.sqlite")
+    try:
+        store.seed_sources(config["sources"])
+        stamp = now_ist()
+        nifty, bars = _price(store, stamp)
+        gift = _gift(store)
+        gift_claims = _gift_gap(store, stamp, gift, last_cash_close(bars, stamp))
+        soften = bool(gift_claims) or store.meta("gift_open_day") == next_open(stamp).date().isoformat()
+        news_claims, news_worked, news_lines = _news(store, config, stamp, nifty, soften)
+        pcr_claims, pcr_worked, chain_state = _pcr(store, config, stamp, nifty)
+        fii_claims, fii_worked, fii_failed = _fii(store, stamp, nifty)
+        level_claims = _levels(store, stamp, nifty)
+        scout_claims, scout_failed = _scout(store, stamp, nifty, soften)
+        claims = news_claims + pcr_claims + fii_claims + level_claims + scout_claims + gift_claims
+        for claim in level_claims + gift_claims:
+            beat = "global" if claim.horizon == "open" else claim.beat
+            news_lines[beat] = _prefer(
+                news_lines.get(beat, (NO_ANSWER, 0)),
+                (clip(claim.headline), claim.midpoint),
+            )
+        worked = news_worked | pcr_worked | fii_worked | {"scout"}
+        if level_claims:
+            worked.add("levels")
+        open_call, ensemble = _publish(store, config, claims, stamp, nifty, worked, last_cash_close(bars, stamp))
+        _log_roster(
+            store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call,
+        )
+        _score(store, config, stamp, bars)
+        _report_limits(
+            store,
+            stamp,
+            nifty=nifty,
+            news_answered=bool(news_worked),
+            news_claims=len(news_claims),
+            scout_failed=scout_failed,
+            chain_state=chain_state,
+            fii_failed=fii_failed and store.meta("fii_net") is None,
+            gift_missing=gift is None,
+            scored=any(row.residual is not None for row in store.ensembles()),
+        )
+        _write_chart(store, root, ensemble, nifty, gift, open_call)
+        _print_board(store)
+        return 0
+    finally:
+        store.close()
+
+
+def _price(store: Store, stamp) -> tuple[float | None, list]:
+    try:
+        with httpx.Client(headers={"User-Agent": "niftyteam/0.1"}) as client:
+            price, bars = fetch_price(client)
+        if price is not None:
+            store.set_meta("nifty", f"{price:.2f}")
+        return price, bars
+    except (httpx.HTTPError, KeyError, ValueError, IndexError):
+        cached = store.meta("nifty")
+        return (float(cached) if cached else None), []
+
+
+def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool = False) -> tuple[list[Claim], set[str], dict[str, tuple[str, float]]]:
+    hour = stamp.hour
+    quiet = hour in set(config.get("quiet_hours") or [])
+    last = store.meta("last_tick")
+    if last:
+        since = datetime.fromisoformat(last) - timedelta(minutes=10)
+    else:
+        since = stamp - timedelta(hours=int(config.get("first_window_hours") or 36))
+    claims: list[Claim] = []
+    worked: set[str] = set()
+    best: dict[str, Claim] = {}
+    answered: set[str] = set()
+    down: set[str] = set()
+    sources = [row for row in store.sources({"rss"}) if row.status in {"active", "probation", "down"}]
+    live = [row for row in sources if row.status != "down"]
+    for source in sources:
+        if source.status == "down":
+            down.add(source.beat)
+    with httpx.Client(headers={"User-Agent": "Mozilla/5.0 niftyteam/0.1"}, follow_redirects=True) as client:
+        for source in live:
+            try:
+                items = fresh(fetch_feed(client, source.url), since)
+                source.fail_streak = 0
+                if source.status == "down":
+                    source.status = "active"
+                    source.weight = max(source.weight, 0.4)
+                store.save_source(source)
+                worked.add(source.beat)
+                answered.add(source.beat)
+            except (httpx.HTTPError, ValueError):
+                _fail(store, source, stamp)
+                if source.status == "down":
+                    down.add(source.beat)
+                continue
+            for item in items:
+                _note_links(store, config, item["summary"], source.beat)
+                if quiet and item["published"] and item["published"] < stamp - timedelta(hours=2):
+                    continue
+                guess = estimate_headline(item["title"])
+                if guess is None:
+                    continue
+                if quiet and abs(guess["midpoint"]) < 40:
+                    continue
+                if soften:
+                    guess["confidence"] *= 0.5
+                claim = _make_claim(source, guess, item["url"], stamp, nifty)
+                if store.add_claim(claim):
+                    claims.append(claim)
+                    prior = best.get(guess["beat"])
+                    if prior is None or abs(claim.midpoint) > abs(prior.midpoint):
+                        best[guess["beat"]] = claim
+    lines: dict[str, tuple[str, float]] = {}
+    for key, _name in ROSTER:
+        if key in {"pcr", "scout"}:
+            continue
+        if key in best:
+            lines[key] = (clip(best[key].headline), best[key].midpoint)
+        elif key in answered:
+            lines[key] = (QUIET, 0)
+        elif key in down:
+            lines[key] = (FEED_DOWN, 0)
+        else:
+            lines[key] = (NO_ANSWER, 0)
+    return claims, worked, lines
+
+
+def _pcr(store: Store, config: dict, stamp, nifty: float | None) -> tuple[list[Claim], set[str], str]:
+    session = config.get("session") or {}
+    if not in_session(stamp, session.get("start", "09:15"), session.get("end", "15:30")):
+        return [], set(), "shut"
+    source = store.source("nse-pcr")
+    if source is None or source.status in {"retired", "down"}:
+        return [], set(), "down"
+    try:
+        with httpx.Client(timeout=8) as client:
+            payload = fetch_chain(client)
+        book = option_book(payload or {}, stamp.date().isoformat())
+        if book is None:
+            raise ValueError("empty chain")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        _fail(store, source, stamp)
+        return [], set(), "failed"
+    source.fail_streak = 0
+    store.save_source(source)
+    worked = {"pcr"}
+    learned = _learned_pcr_sign(source)
+    claims: list[Claim] = []
+    claims.extend(_pcr_leg(store, source, stamp, nifty, "week", book["week"], learned, "Weekly put-call ratio", "pcr:week"))
+    if not book["same_expiry"]:
+        claims.extend(_pcr_leg(store, source, stamp, nifty, "month", book["month"], learned, "Monthly put-call ratio", "pcr:month"))
+    else:
+        store.add_pcr(
+            stamp.isoformat(),
+            book["month"]["expiry"],
+            book["month"]["oi_pcr"],
+            0,
+            stamp.date().isoformat(),
+            "month",
+            book["month"]["oi_change"],
+        )
+    claims.extend(_oi_leg(store, source, stamp, nifty, book["week"], learned))
+    return claims, worked, "ok"
+
+
+def _pcr_leg(store, source, stamp, nifty, bucket, leg, learned, label, shock) -> list[Claim]:
+    previous = store.recent_pcr(30, bucket)
+    store.add_pcr(stamp.isoformat(), leg["expiry"], leg["oi_pcr"], 0, stamp.date().isoformat(), bucket, leg["oi_change"])
+    if not previous:
+        return []
+    delta = leg["oi_pcr"] - float(previous[0]["oi_pcr"])
+    history = [float(row["oi_pcr"]) for row in previous]
+    diffs = [history[i] - history[i + 1] for i in range(len(history) - 1)]
+    guess = pcr_estimate(delta, trailing_std(diffs), learned, label, shock)
+    return _keep_pcr_claim(store, source, stamp, nifty, guess, f"pcr:{bucket}:{stamp.isoformat()}")
+
+
+def _oi_leg(store, source, stamp, nifty, leg, learned) -> list[Claim]:
+    previous = [row for row in store.recent_pcr(30, "week") if row["ts"] != stamp.isoformat()]
+    history = [float(row["oi_change"] or 0) for row in previous]
+    spread = trailing_std(history) if len(history) >= 4 else 0
+    guess = oi_change_estimate(leg["oi_change"], spread, learned)
+    return _keep_pcr_claim(store, source, stamp, nifty, guess, f"pcr:oi:{stamp.isoformat()}")
+
+
+def _keep_pcr_claim(store, source, stamp, nifty, guess, url) -> list[Claim]:
+    if guess is None:
+        return []
+    claim = _make_claim(source, guess, url, stamp, nifty)
+    if not store.add_claim(claim):
+        return []
+    return [claim]
+
+
+def _fii(store: Store, stamp, nifty: float | None) -> tuple[list[Claim], set[str], bool]:
+    source = store.source("fii-dii")
+    if source is None or source.status in {"retired", "down"}:
+        return [], set(), source is not None and source.status == "down"
+    flows = _read_flows(store)
+    net = flows.get("fii")
+    failed = net is None and store.meta("fii_net") is None
+    day = stamp.date().isoformat()
+    if store.meta("fii_day") == day or net is None:
+        return [], {"flows"} if net is not None else set(), failed
+    store.set_meta("fii_day", day)
+    source.fail_streak = 0
+    store.save_source(source)
+    worked = {"flows"}
+    claims = []
+    claims.extend(_flow_claim(store, source, stamp, nifty, net, day, "FII", "fii"))
+    dii = flows.get("dii")
+    if dii is not None:
+        claims.extend(_flow_claim(store, source, stamp, nifty, dii, day, "DII", "dii"))
+    return claims, worked, False
+
+
+def _flow_claim(store, source, stamp, nifty, net: float, day: str, label: str, key: str) -> list[Claim]:
+    if abs(net) < 500:
+        return []
+    direction = "down" if net < 0 else "up"
+    if key == "dii":
+        direction = "up" if net > 0 else "down"
+    magnitude = min(70, max(20, abs(net) / 1000 * 8))
+    signed = (1 if direction == "up" else -1) * (magnitude * 0.8)
+    guess = {
+        "beat": "flows",
+        "direction": direction,
+        "points_low": magnitude * 0.6,
+        "points_high": magnitude,
+        "midpoint": signed,
+        "confidence": 0.35,
+        "headline": f"{label} net {net:,.0f} crore today.",
+        "shock_key": f"{key}:{direction}",
+        "body": f"{label} net {net:,.0f} crore today.",
+        "horizon": "session",
+    }
+    claim = _make_claim(source, guess, f"{key}:{day}", stamp, nifty)
+    if not store.add_claim(claim):
+        return []
+    return [claim]
+
+
+def _read_flows(store: Store) -> dict[str, float]:
+    source = store.source("fii-dii")
+    try:
+        with httpx.Client(timeout=8) as client:
+            flows = fetch_flows(client)
+        if "fii" not in flows:
+            raise ValueError("no fii row")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        cached = store.meta("fii_net")
+        found = {}
+        if cached:
+            found["fii"] = float(cached)
+        dii = store.meta("dii_net")
+        if dii:
+            found["dii"] = float(dii)
+        if not found and source is not None:
+            _fail(store, source, datetime.now(IST))
+        return found
+    store.set_meta("fii_net", f"{flows['fii']:.2f}")
+    if "dii" in flows:
+        store.set_meta("dii_net", f"{flows['dii']:.2f}")
+    if source is not None:
+        source.fail_streak = 0
+        store.save_source(source)
+    return flows
+
+
+def _gift(store: Store) -> dict | None:
+    try:
+        with httpx.Client(timeout=12) as client:
+            quote = fetch_gift(client)
+        if quote is None:
+            raise ValueError("no gift row")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        price = store.meta("gift_nifty")
+        if not price:
+            return None
+        return {"price": float(price), "change": float(store.meta("gift_change") or 0)}
+    store.set_meta("gift_nifty", f"{quote['price']:.2f}")
+    store.set_meta("gift_change", f"{quote['change']:.2f}")
+    return quote
+
+
+def _gift_gap(store: Store, stamp, quote: dict | None, last_close: float | None) -> list[Claim]:
+    _ensure_source(store, "gift", "global", "https://www.nseix.com/api/market-rate?type=derivatives")
+    source = store.source("gift")
+    if source is None or quote is None or last_close is None:
+        return []
+    if source.n_scored == 0 and source.weight <= 0.4:
+        source.weight = 1.2
+        store.save_source(source)
+    guess = gift_gap_estimate(quote["price"] - last_close)
+    if guess is None:
+        return []
+    when = next_open(stamp)
+    store.set_meta("gift_open_day", when.date().isoformat())
+    url = f"gift:{when.date().isoformat()}"
+    claim = _make_claim(source, guess, url, stamp, last_close)
+    if not store.add_claim(claim):
+        return []
+    return [claim]
+
+
+LEVEL_FEEDS = {
+    "brent": "BZ=F",
+    "usdinr": "INR=X",
+    "gold": "GC=F",
+    "es": "ES=F",
+    "indiavix": "^INDIAVIX",
+}
+
+
+def _levels(store: Store, stamp, nifty: float | None) -> list[Claim]:
+    day = stamp.date().isoformat()
+    claims: list[Claim] = []
+    try:
+        with httpx.Client(timeout=12) as client:
+            prints = {name: fetch_level(client, symbol) for name, symbol in LEVEL_FEEDS.items()}
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        prints = {}
+    for name in LEVEL_RULES:
+        value = prints.get(name)
+        if value is None:
+            continue
+        previous = store.previous_level(name, day)
+        store.save_level(day, name, value)
+        if previous is None:
+            continue
+        _ensure_source(store, name, "global", f"https://query1.finance.yahoo.com/v8/finance/chart/{LEVEL_FEEDS[name]}")
+        source = store.source(name)
+        if source is None:
+            continue
+        guess = level_estimate(name, value - previous, store.level_pairs(name))
+        if guess is None:
+            continue
+        claim = _make_claim(source, guess, f"level:{name}:{day}", stamp, nifty)
+        if store.add_claim(claim):
+            claims.append(claim)
+    return claims
+
+
+def _ensure_source(store: Store, source_id: str, beat: str, url: str) -> None:
+    store.seed_sources([{"id": source_id, "beat": beat, "kind": "level", "url": url}])
+
+
+def _scout(store: Store, stamp, nifty: float | None, soften: bool = False) -> tuple[list[Claim], bool]:
+    store.seed_sources([
+        {"id": "scout", "beat": "scout", "kind": "scout", "url": "https://html.duckduckgo.com/html/"},
+    ])
+    scout = store.source("scout")
+    if scout is not None and scout.status in {"down", "retired"}:
+        scout.status = "active"
+        scout.weight = max(scout.weight, 0.2)
+        store.save_source(scout)
+    stories = 0
+    new_sources = 0
+    claims: list[Claim] = []
+    failed = False
+    try:
+        with httpx.Client(follow_redirects=True) as client:
+            results = search_web(client, query_for(stamp.hour))
+    except (httpx.HTTPError, ValueError):
+        results = []
+        failed = True
+    known = store.known_domains()
+    for item in results:
+        guess = estimate_headline(item["title"])
+        if guess is None:
+            continue
+        guess = dict(guess)
+        guess["confidence"] = min(0.2, guess["confidence"] * 0.5)
+        if soften:
+            guess["confidence"] *= 0.5
+        domain = item["domain"]
+        source = _source_for_domain(store, domain)
+        if source is None and domain not in known:
+            if store.add_probation_source(domain, item["url"], guess["beat"], kind="web"):
+                new_sources += 1
+                known.add(domain)
+            source = _source_for_domain(store, domain)
+        if source is None:
+            source = store.source("scout")
+        if source is None:
+            continue
+        claim = _make_claim(source, guess, item["url"], stamp, nifty)
+        if store.add_claim(claim):
+            stories += 1
+            claims.append(claim)
+    if failed:
+        line = SEARCH_FAILED
+    elif stories or new_sources:
+        line = scout_sentence(stories, new_sources)
+    else:
+        line = QUIET
+    store.add_event(stamp.isoformat(), line, 0, agent="scout")
+    return claims, failed
+
+
+def _source_for_domain(store: Store, domain: str) -> Source | None:
+    for row in store.sources():
+        if row.domain in {domain, f"www.{domain}"} and row.status in {"active", "probation"}:
+            return row
+    return None
+
+
+def accuracy_notes(
+    *,
+    nifty: float | None,
+    news_answered: bool,
+    news_claims: int,
+    scout_failed: bool,
+    chain_state: str,
+    fii_failed: bool,
+    gift_missing: bool = False,
+    down_ids: list[str],
+    scored: bool,
+) -> list[str]:
+    notes = []
+    if nifty is None:
+        notes.append("Boss: Nifty price is missing. Calls from this hour cannot be scored.")
+    if gift_missing:
+        notes.append("Boss: GIFT Nifty value is missing.")
+    if not news_answered:
+        notes.append("News agents: no feed answered. Headlines are missing from the mean.")
+    elif news_claims == 0:
+        notes.append("News agents: no story was strong enough to score.")
+    if scout_failed:
+        notes.append("Scout: the web search did not answer. New sources were not checked.")
+    if chain_state == "shut":
+        notes.append("Boss: the market is shut. Weekly and monthly put-call changes, and the Nifty option change, were not read.")
+    elif chain_state == "failed":
+        notes.append("Options agent: the chain did not answer. Put-call and option changes are missing.")
+    elif chain_state == "down":
+        notes.append("Options agent: the chain feed is off after repeated failures.")
+    if fii_failed:
+        notes.append("Flows agent: FII flow did not answer.")
+    if down_ids:
+        shown = ", ".join(down_ids[:6])
+        notes.append(f"Boss: {len(down_ids)} feeds are down and out of the mean. {shown}.")
+    if not scored:
+        notes.append("Boss: no call has been scored yet, so trust weights are still the starting values.")
+    return notes
+
+
+def _report_limits(store: Store, stamp, **flags) -> None:
+    down_ids = [row.id for row in store.sources() if row.status == "down"]
+    notes = accuracy_notes(down_ids=down_ids, **flags)
+    store.set_meta("issues", json.dumps(notes))
+
+
+def _publish(store, config, claims: list[Claim], stamp, nifty: float | None, worked: set[str], last_close: float | None = None):
+    store.set_meta("last_tick", stamp.isoformat())
+    store.set_meta("agents", str(max(1, len(worked))))
+    opened = _one_call(store, config, [row for row in claims if row.horizon == "open"], stamp, last_close, "open")
+    session = _one_call(store, config, [row for row in claims if row.horizon != "open"], stamp, nifty, "session")
+    return opened or store.latest_ensemble("open"), session or store.latest_ensemble("session")
+
+
+def _one_call(store, config, claims: list[Claim], stamp, anchor: float | None, horizon: str) -> Ensemble | None:
+    if not claims:
+        return None
+    sources = {row.id: row for row in store.sources()}
+    floor = float(store.meta("sigma_floor", str(config.get("sigma_floor") or 30)))
+    built = build_ensemble(claims, sources, floor)
+    if built is None:
+        return None
+    item = Ensemble(
+        id=uuid4().hex[:12],
+        ts=stamp.isoformat(),
+        mu=built["mu"],
+        sigma=built["sigma"],
+        n_shocks=built["n_shocks"],
+        nifty_level=anchor,
+        horizon=horizon,
+    )
+    store.add_ensemble(item)
+    store.attach_ensemble(built["ids"], item.id)
+    return item
+
+
+def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> None:
+    due = store.due_claims(stamp.isoformat())
+    if not due or not bars:
+        return
+    residuals = [row.residual for row in store.ensembles() if row.residual is not None]
+    book = book_std(residuals)
+    by_ensemble: dict[str, list[Claim]] = {}
+    for claim in due:
+        if not claim.ensemble_id:
+            continue
+        if claim.horizon == "open" and claim.nifty_level is None:
+            continue
+        score_day = claim.score_after[:10]
+        if claim.horizon == "open":
+            opened = day_open(bars, score_day)
+            if opened is None or claim.nifty_level is None:
+                continue
+            actual = opened - claim.nifty_level
+        else:
+            actual = session_move(bars, score_day)
+            if actual is None:
+                continue
+        claim.actual_move = actual
+        claim.residual = actual - claim.midpoint
+        claim.status = "scored"
+        store.save_claim(claim)
+        source = store.source(claim.source_id)
+        if source is not None:
+            apply_score(source, claim.residual, book)
+            if source.id == "scout" and source.status == "retired":
+                source.status = "active"
+                source.weight = max(source.weight, 0.2)
+            store.save_source(source)
+        if claim.driver is not None:
+            store.add_level_pair(claim.source_id, claim.driver, actual)
+        word = "fell" if actual < 0 else "rose" if actual > 0 else "was flat"
+        inside = ""
+        ensemble = _ensemble_by_id(store, claim.ensemble_id)
+        if ensemble is not None and abs(actual - ensemble.mu) <= ensemble.sigma:
+            inside = " Inside the curve."
+        miss = abs(claim.residual)
+        label = "open" if claim.horizon == "open" else "session"
+        store.add_event(
+            stamp.isoformat(),
+            f"Scored the {label} call. Nifty {word} {abs(actual):.0f}. Missed the mean by {miss:.0f}.{inside}",
+            actual,
+            agent="score",
+        )
+        by_ensemble.setdefault(claim.ensemble_id, []).append(claim)
+    for ensemble_id, group in by_ensemble.items():
+        ensemble = _ensemble_by_id(store, ensemble_id)
+        if ensemble is None:
+            continue
+        if group[0].horizon == "open" and ensemble.nifty_level is None:
+            continue
+        score_day = group[0].score_after[:10]
+        if group[0].horizon == "open":
+            opened = day_open(bars, score_day)
+            if opened is None or ensemble.nifty_level is None:
+                continue
+            ensemble.actual = opened - ensemble.nifty_level
+        else:
+            move = session_move(bars, score_day)
+            if move is None:
+                continue
+            ensemble.actual = move
+        ensemble.residual = ensemble.actual - ensemble.mu
+        store.save_ensemble(ensemble)
+    _retune_floor(store, config)
+
+
+def _log_roster(store, stamp, news_lines, pcr_claims, chain_state, fii_claims, fii_worked, fii_failed, ensemble, open_call=None) -> None:
+    lines = dict(news_lines)
+    lines["flows"] = _prefer(lines.get("flows", (NO_ANSWER, 0)), _fii_line(store, fii_claims, fii_worked, fii_failed))
+    lines["pcr"] = _pcr_line(pcr_claims, chain_state)
+    if ensemble is not None and ensemble.ts == stamp.isoformat():
+        board = (f"Spread {ensemble.sigma:.0f}", ensemble.mu)
+    elif open_call is not None and open_call.ts == stamp.isoformat():
+        board = (f"Open {impact_text(open_call.mu)}", open_call.mu)
+    else:
+        board = (QUIET, 0.0)
+    if open_call is not None and ensemble is not None and open_call.ts == stamp.isoformat() and ensemble.ts == stamp.isoformat():
+        board = (f"Open {impact_text(open_call.mu)}. Spread {ensemble.sigma:.0f}.", ensemble.mu)
+    have = {row.agent for row in store.events(20) if row.ts == stamp.isoformat() and row.agent}
+    for key, _name in ROSTER:
+        if key in have:
+            continue
+        sentence, impact = lines.get(key, (NO_ANSWER, 0))
+        store.add_event(stamp.isoformat(), sentence, impact, agent=key)
+    if BOARD_AGENT not in have:
+        store.add_event(stamp.isoformat(), board[0], board[1], agent=BOARD_AGENT)
+
+
+def _prefer(left: tuple[str, float], right: tuple[str, float]) -> tuple[str, float]:
+    def call(item: tuple[str, float]) -> bool:
+        return item[0] not in STATUS_LINES
+
+    if call(left) and call(right):
+        return left if abs(left[1]) >= abs(right[1]) else right
+    if call(left):
+        return left
+    if call(right):
+        return right
+    if left[0] in {QUIET, SHUT}:
+        return left
+    if right[0] in {QUIET, SHUT}:
+        return right
+    if left[0] == FEED_DOWN or right[0] == FEED_DOWN:
+        return (FEED_DOWN, 0)
+    return left
+
+
+def _fii_line(store, claims, worked, failed) -> tuple[str, float]:
+    if claims:
+        best = max(claims, key=lambda claim: abs(claim.midpoint))
+        return clip(best.headline), best.midpoint
+    if worked:
+        return QUIET, 0
+    source = store.source("fii-dii")
+    if failed and source is not None and source.status == "down":
+        return FEED_DOWN, 0
+    if failed:
+        return NO_ANSWER, 0
+    return QUIET, 0
+
+
+def _pcr_line(claims, state: str) -> tuple[str, float]:
+    if claims:
+        best = max(claims, key=lambda claim: abs(claim.midpoint))
+        return clip(best.body or best.headline), best.midpoint
+    if state == "shut":
+        return SHUT, 0
+    if state == "down":
+        return FEED_DOWN, 0
+    if state == "failed":
+        return NO_ANSWER, 0
+    return QUIET, 0
+
+
+def _retune_floor(store: Store, config: dict) -> None:
+    rows = [row for row in store.ensembles() if row.actual is not None and row.sigma]
+    flags = [abs(row.actual - row.mu) <= row.sigma for row in rows[-30:]]
+    floor = float(store.meta("sigma_floor", str(config.get("sigma_floor") or 30)))
+    store.set_meta("sigma_floor", str(next_sigma_floor(floor, flags)))
+
+
+def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict | None = None, open_call: Ensemble | None = None) -> None:
+    latest = ensemble or store.latest_ensemble("session")
+    if open_call is None:
+        open_call = store.latest_ensemble("open")
+    rows = store.ensembles()
+    residuals = [(row.residual, row.sigma) for row in rows if row.residual is not None]
+    scored = len(residuals)
+    cached = store.meta("nifty")
+    level = nifty if nifty is not None else (float(cached) if cached else None)
+    raw_fii = store.meta("fii_net")
+    raw_agents = store.meta("agents")
+    html = render_page(
+        latest,
+        residuals,
+        store.events(80),
+        level,
+        scored,
+        store.meta("last_tick"),
+        gift,
+        float(raw_fii) if raw_fii else None,
+        _saved_notes(store),
+        int(raw_agents) if raw_agents else None,
+        rows,
+        open_call,
+        store.scored_claims(),
+    )
+    path = root / "data" / "chart.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html)
+
+
+def _saved_notes(store: Store) -> list[str]:
+    raw = store.meta("issues")
+    if not raw:
+        return []
+    try:
+        notes = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [note for note in notes if isinstance(note, str)]
+
+
+def _print_board(store: Store) -> None:
+    opened = store.latest_ensemble("open")
+    latest = store.latest_ensemble("session")
+    if opened:
+        print(f"Open {opened.mu:+.0f}  spread {opened.sigma:.0f}")
+    if latest:
+        print(f"Session {latest.mu:+.0f}  spread {latest.sigma:.0f}  shocks {latest.n_shocks}")
+    elif opened is None:
+        print("No forecast yet.")
+    for event in store.events(12):
+        print(f"{event.ts[11:16]}  {event.sentence}  {event.impact:+.0f}")
+
+
+def _make_claim(source: Source, guess: dict, url: str, stamp, nifty: float | None) -> Claim:
+    horizon = guess.get("horizon") or "session"
+    when = next_open(stamp) if horizon == "open" else session_close(stamp)
+    return Claim(
+        id=uuid4().hex[:12],
+        beat=guess["beat"],
+        source_id=source.id,
+        ts=stamp.isoformat(),
+        headline=guess["headline"],
+        url=url,
+        shock_key=guess["shock_key"],
+        direction=guess["direction"],
+        points_low=guess["points_low"],
+        points_high=guess["points_high"],
+        midpoint=guess["midpoint"],
+        confidence=guess["confidence"],
+        nifty_level=nifty,
+        score_after=when.isoformat(),
+        status="open",
+        body=guess.get("body") or guess["headline"],
+        horizon=horizon,
+        driver=guess.get("driver"),
+    )
+
+
+def _fail(store: Store, source: Source, stamp) -> None:
+    source.fail_streak += 1
+    if source.fail_streak >= 3 and source.status not in {"retired", "down"}:
+        source.status = "down"
+        source.weight = 0
+    store.save_source(source)
+
+
+def _note_links(store: Store, config: dict, summary: str, beat: str) -> None:
+    allow = {item.lower() for item in config.get("allowlist") or []}
+    known = store.known_domains()
+    for url in hrefs(summary):
+        domain = domain_of(url)
+        if not domain or domain in known:
+            continue
+        if domain in allow:
+            if store.add_probation_source(domain, url, beat):
+                known.add(domain)
+        else:
+            store.remember_link(domain, url, "proposal")
+
+
+def _learned_pcr_sign(source: Source) -> float:
+    if source.n_scored < 20 or source.n_scored == 0:
+        return 0.0
+    return source.residual_sum / source.n_scored
+
+
+def _close_on_or_after(bars, day: str) -> float | None:
+    for bar_day, close in bars:
+        if bar_day >= day:
+            return close
+    return None
+
+
+def _ensemble_by_id(store: Store, ensemble_id: str):
+    for item in store.ensembles():
+        if item.id == ensemble_id:
+            return item
+    return None
+
