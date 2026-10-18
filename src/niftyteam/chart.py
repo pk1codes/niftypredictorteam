@@ -31,16 +31,6 @@ def render_page(
     log = _activity(events)
     learning = _learning(claims or [], history or [])
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
-    mean = "—"
-    spread = "—"
-    opened = "—"
-    open_kind = "flat"
-    if open_call is not None:
-        opened = impact_text(open_call.mu)
-        open_kind = impact_class(open_call.mu)
-    if ensemble is not None:
-        mean = impact_text(ensemble.mu)
-        spread = f"{ensemble.sigma:.0f}"
     early = ""
     if scored < 30:
         early = f"<p class='note'>Early curve. {scored} scored forecasts. The error bell settles after a few dozen checks.</p>"
@@ -81,7 +71,15 @@ def render_page(
   svg {{ width: 100%; height: auto; display: block; }}
   .roster {{ margin-top: 18px; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
   .roster-head {{ display: flex; justify-content: space-between; padding: 12px 14px 4px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .matters {{ display: grid; gap: 10px; margin: 0 0 16px; }}
+  .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 10px 14px 6px; }}
+  .matters h2 {{ margin: 0 0 6px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .matter {{ display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid #f0ebe3; }}
+  .matter.bad .line {{ color: #8a1c1c; }}
+  .matter.idle .line {{ color: #8a5a00; }}
   .agent {{ display: flex; gap: 10px; align-items: baseline; padding: 8px 14px; border-top: 1px solid #f0ebe3; }}
+  .agent.idle {{ background: #fff6e8; }}
+  .agent.bad {{ background: #fdecea; }}
   .dot {{ width: 8px; height: 8px; border-radius: 50%; background: #b9b2a6; flex: none; }}
   .dot.ok {{ background: #0c7a3a; }}
   .dot.bad {{ background: #c47b00; }}
@@ -108,14 +106,11 @@ def render_page(
   <p class="sub">{escape(level)}</p>
   {status}
   <div class="stats">
-    <div><span>Open</span><strong class="{open_kind}">{escape(opened)}</strong></div>
-    <div><span>Session</span><strong class="{impact_class(ensemble.mu) if ensemble else 'flat'}">{escape(mean)}</strong></div>
-    <div><span>Spread</span><strong>{escape(spread)}</strong></div>
-    <div><span>Scored</span><strong>{scored}</strong></div>
     {gift_tile}
     {fii_tile}
   </div>
   {early}
+  {_matters(events)}
   <div class="charts">
     <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
     <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
@@ -189,6 +184,56 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
             shown = f"{number:+,}{suffix}"
         kind = impact_class(0 if tint is None else tint)
     return f"<div><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
+
+
+def _matters(events: list[Event]) -> str:
+    grouped: dict[str, list[Event]] = {}
+    order: list[str] = []
+    for event in events:
+        if event.ts not in grouped:
+            order.append(event.ts)
+            grouped[event.ts] = []
+        grouped[event.ts].append(event)
+    if not order:
+        return ""
+    found = _by_agent(grouped[order[0]])
+    moving = []
+    watching = []
+    for key, name in ROSTER:
+        event = found.get(key)
+        sentence = event.sentence if event else "No check"
+        impact = event.impact if event else 0
+        if sentence in MISSED_LINES or sentence == "No check":
+            watching.append((name, sentence, "bad", impact))
+        elif sentence in STATUS_LINES:
+            watching.append((name, sentence, "idle", impact))
+        else:
+            moving.append((name, sentence, "ok", impact))
+    moving.sort(key=lambda row: abs(row[3]), reverse=True)
+    score = found.get(SCORE_AGENT)
+    if score is not None and ("Missed" in score.sentence or "Kept" in score.sentence):
+        moving.insert(0, ("Score", score.sentence, "bad", score.impact))
+    move_html = _matter_rows(moving) or "<p class='matter'><span class='line'>No strong event this hour.</span></p>"
+    watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
+    return (
+        "<div class='matters'>"
+        f"<section><h2>Moving the forecast</h2>{move_html}</section>"
+        f"<section><h2>Quiet or stuck</h2>{watch_html}</section>"
+        "</div>"
+    )
+
+
+def _matter_rows(rows: list[tuple[str, str, str, float]]) -> str:
+    html = []
+    for name, sentence, kind, impact in rows:
+        points = ""
+        if kind == "ok":
+            points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
+        html.append(
+            f"<div class='matter {kind}'><span class='name'>{escape(name)}</span>"
+            f"<span class='line'>{escape(sentence)}</span>{points}</div>"
+        )
+    return "\n".join(html)
 
 
 def _activity(events: list[Event]) -> str:
@@ -269,7 +314,7 @@ def _agent_row(name: str, event: Event | None) -> str:
     if sentence not in STATUS_LINES and sentence != "No check":
         points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
     return (
-        f"<div class='agent'><span class='dot {kind}'></span>"
+        f"<div class='agent {kind}'><span class='dot {kind}'></span>"
         f"<span class='name'>{escape(name)}</span>"
         f"<span class='line'>{escape(sentence)}</span>{points}</div>"
     )
