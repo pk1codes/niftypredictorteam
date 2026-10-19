@@ -359,6 +359,10 @@ def _place(store, stamp: datetime, bars: list, prices: dict, due: datetime) -> N
     if anchor is None or any(name not in prices or prices[name] is None for name in RAW):
         return
     store.save_snapshots(day, {RAW[name]: float(prices[name]) for name in RAW})
+    optional = _optional_features(store, day, prices, anchor)
+    store.save_snapshots(day, optional)
+    for name in optional:
+        store.ensure_ahead_driver(name, "probation")
     previous = {name: store.previous_snapshot(RAW[name], day) for name in RAW}
     if any(value is None for value in previous.values()):
         return
@@ -371,11 +375,7 @@ def _place(store, stamp: datetime, bars: list, prices: dict, due: datetime) -> N
         "usdinr": float(prices["usdinr"]) - float(previous["usdinr"]),
         "brent": float(prices["brent"]) - float(previous["brent"]),
     }
-    optional = _optional_features(store, day, prices, anchor)
     store.save_snapshots(day, features)
-    store.save_snapshots(day, optional)
-    for name in optional:
-        store.ensure_ahead_driver(name, "probation")
     kept = _order([row["name"] for row in store.ahead_drivers() if row["status"] == "kept"])
     saved = store.snapshots(day)
     vector = []

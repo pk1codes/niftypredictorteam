@@ -196,6 +196,27 @@ def test_every_query_keeps_eight_stories():
     assert f"{QUERIES[0]} 8" not in titles
 
 
+def test_a_missing_prior_price_still_stores_the_extra_readings(tmp_path):
+    store = Store(tmp_path / "ahead.sqlite")
+    store.add_pcr("2026-10-19T15:20:00+05:30", "2026-10-27", 1.1, 1.0, "2026-10-19")
+    stamp = datetime(2026, 10, 19, 16, 35, tzinfo=IST)
+    run_ahead(
+        store,
+        stamp,
+        _bars("2026-10-19", [100, 110, 120, 130, 140, 150, 160, 170]),
+        lambda: {"es": 5100.0, "usdinr": 85.0, "brent": 72.0, "gold": 2000.0, "indiavix": 14.0, "gift": 172.0},
+        lambda: ["Crude supply rises sharply"],
+    )
+    saved = store.snapshots("2026-10-19")
+    assert store.ahead_call("2026-10-19") is None
+    assert saved["gold_px"] == 2000.0
+    assert saved["indiavix_px"] == 14.0
+    assert saved["gift"] == 2.0
+    assert saved["pcr_px"] == 1.1
+    assert store.topic("crude supply rises")["direction"] == 1
+    store.close()
+
+
 def test_a_new_phrase_has_direction_and_no_points(tmp_path):
     store = _ready(tmp_path)
     stamp = datetime(2026, 10, 19, 16, 35, tzinfo=IST)
