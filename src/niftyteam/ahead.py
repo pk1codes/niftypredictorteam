@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, time
 
 from niftyteam.config import IST
+from niftyteam.estimate import headline_kind
 from niftyteam.horizons import decision_due
 
 V1 = ("nifty5", "es", "usdinr", "brent")
@@ -12,8 +14,15 @@ LABELS = {
     "es": "US futures",
     "usdinr": "Rupee",
     "brent": "Brent",
+    "gold": "Gold",
+    "indiavix": "India VIX",
+    "gift": "GIFT",
+    "pcr": "Put-call",
 }
 RAW = {"brent": "brent_px", "usdinr": "usdinr_px", "es": "es_px"}
+OPTIONAL_RAW = {"gold": "gold_px", "indiavix": "indiavix_px"}
+_UP = re.compile(r"\b(jump|jumps|surge|surges|rise|rises|rose|rally|gain|gains|spike|spikes|record|stronger)\b")
+_DOWN = re.compile(r"\b(fall|falls|slip|slips|drop|drops|ease|eases|slide|slides|slump|selloff|sink|fear|weaker)\b")
 WINDOW = 20
 MIN_TRAIN = 30
 MAE_STEP = 30.0
@@ -209,6 +218,69 @@ def scored_samples(store) -> list[dict]:
     return samples
 
 
+def phrase_direction(title: str) -> int | None:
+    text = title.lower()
+    up = _UP.search(text) is not None
+    down = _DOWN.search(text) is not None
+    if up == down:
+        return None
+    return 1 if up else -1
+
+
+def settle_phrases(store, day: str, actual: float) -> None:
+    """Keep a phrase whose direction matches the move. Fade one that is wrong more than half the time."""
+    sign = 0 if actual == 0 else (1 if actual > 0 else -1)
+    for row in store.topic_days_on(day):
+        if row["scored"] or int(row["direction"]) == 0:
+            continue
+        phrase = row["phrase"]
+        store.mark_topic(phrase, sign != 0 and int(row["direction"]) == sign)
+        store.mark_topic_day(day, phrase)
+        topic = store.topic(phrase)
+        if topic is None or not topic["alive"]:
+            continue
+        total = int(topic["hits"]) + int(topic["misses"])
+        if total >= 5 and int(topic["hits"]) * 2 < total:
+            store.fade_topic(phrase)
+            name = _topic_name(phrase)
+            if any(item["name"] == name for item in store.ahead_drivers()):
+                store.set_ahead_driver(name, "faded", 0.0)
+
+
+def ingest_stories(store, day: str, titles: list[str]) -> None:
+    for title in titles:
+        phrase = headline_kind(title)
+        if not phrase:
+            continue
+        direction = phrase_direction(title)
+        store.save_topic_day(day, phrase, 0 if direction is None else direction)
+        if direction is None:
+            continue
+        returned = store.topic_seen_before(phrase, day)
+        store.ensure_topic(phrase, direction)
+        topic = store.topic(phrase)
+        if topic is None or not topic["alive"] or not returned:
+            continue
+        name = _topic_name(phrase)
+        store.ensure_ahead_driver(name, "probation")
+        store.save_snapshots(day, {name: float(direction)})
+
+
+def improvement_note(store) -> str:
+    rows = [
+        row
+        for row in store.ahead_calls()
+        if row["status"] == "scored" and row["model_abs"] is not None
+    ]
+    if len(rows) < WINDOW * 2:
+        return ""
+    latest = sum(float(row["model_abs"]) for row in rows[-WINDOW:]) / WINDOW
+    prior = sum(float(row["model_abs"]) for row in rows[-WINDOW * 2 : -WINDOW]) / WINDOW
+    if latest < prior:
+        return "Better than the previous 20"
+    return "Not an improvement"
+
+
 def ahead_view(store) -> dict | None:
     row = store.latest_ahead()
     if row is None:
@@ -217,10 +289,15 @@ def ahead_view(store) -> dict | None:
         parts = json.loads(row["parts"] or "[]")
     except json.JSONDecodeError:
         parts = []
-    return {"move": float(row["predicted_move"]), "parts": parts, "due": row["due_day"]}
+    return {
+        "move": float(row["predicted_move"]),
+        "parts": parts,
+        "due": row["due_day"],
+        "note": improvement_note(store),
+    }
 
 
-def run_ahead(store, stamp: datetime, bars: list, fetch_prices=None) -> None:
+def run_ahead(store, stamp: datetime, bars: list, fetch_prices=None, fetch_stories=None) -> None:
     _seed(store)
     _score_open(store, stamp, bars)
     due = decision_due(stamp)
@@ -229,6 +306,9 @@ def run_ahead(store, stamp: datetime, bars: list, fetch_prices=None) -> None:
     day = stamp.date().isoformat()
     if store.ahead_call(day) is not None:
         return
+    if fetch_stories is not None and store.meta("ahead_stories_day") != day:
+        ingest_stories(store, day, fetch_stories() or [])
+        store.set_meta("ahead_stories_day", day)
     if store.meta("ahead_edit_day") != day:
         _edit(store, day)
         store.set_meta("ahead_edit_day", day)
@@ -248,7 +328,9 @@ def _score_open(store, stamp: datetime, bars: list) -> None:
         if kind == "discard":
             store.finish_ahead(call["day"], None, "discarded")
             continue
-        store.finish_ahead(call["day"], float(close) - float(call["anchor"]), "scored")
+        actual = float(close) - float(call["anchor"])
+        store.finish_ahead(call["day"], actual, "scored")
+        settle_phrases(store, call["day"], actual)
 
 
 def _edit(store, day: str) -> None:
@@ -260,7 +342,7 @@ def _edit(store, day: str) -> None:
         probation,
         store.meta("ahead_frozen_on") or "",
     )
-    if changed is None or (changed in _kept and changed not in V1):
+    if changed is None:
         return
     for name in _kept:
         store.set_ahead_status(name, "kept")
@@ -289,10 +371,23 @@ def _place(store, stamp: datetime, bars: list, prices: dict, due: datetime) -> N
         "usdinr": float(prices["usdinr"]) - float(previous["usdinr"]),
         "brent": float(prices["brent"]) - float(previous["brent"]),
     }
+    optional = _optional_features(store, day, prices, anchor)
     store.save_snapshots(day, features)
+    store.save_snapshots(day, optional)
+    for name in optional:
+        store.ensure_ahead_driver(name, "probation")
     kept = _order([row["name"] for row in store.ahead_drivers() if row["status"] == "kept"])
-    if any(name not in features for name in kept):
-        return
+    saved = store.snapshots(day)
+    vector = []
+    for name in kept:
+        if name in features:
+            vector.append(features[name])
+        elif name in saved:
+            vector.append(saved[name])
+        elif name.startswith("topic:"):
+            vector.append(0.0)
+        else:
+            return
     history = []
     gate_rows = []
     for call in store.ahead_calls():
@@ -310,15 +405,15 @@ def _place(store, stamp: datetime, bars: list, prices: dict, due: datetime) -> N
         if any(name not in values for name in kept):
             continue
         history.append(([float(values[name]) for name in kept], float(call["actual_move"])))
-    model_move, contribs, intercept = project(history, [features[name] for name in kept])
+    model_move, contribs, intercept = project(history, vector)
     published = choose_published(gate_rows, model_move, store.meta("ahead_frozen_on") or "")
     if published is None:
         predicted = 0.0
-        parts = [(LABELS.get(name, name), 0.0) for name in kept] + [("Base", 0.0)]
+        parts = [(_driver_label(name), 0.0) for name in kept] + [("Base", 0.0)]
         shown = {name: 0.0 for name in kept}
     else:
         predicted = model_move
-        parts = [(LABELS.get(name, name), contribs[index]) for index, name in enumerate(kept)]
+        parts = [(_driver_label(name), contribs[index]) for index, name in enumerate(kept)]
         parts.append(("Base", intercept))
         shown = {name: contribs[index] for index, name in enumerate(kept)}
     store.add_ahead_call(
@@ -335,6 +430,39 @@ def _place(store, stamp: datetime, bars: list, prices: dict, due: datetime) -> N
             store.set_ahead_driver(row["name"], "kept", shown.get(row["name"], 0.0))
         else:
             store.set_ahead_driver(row["name"], row["status"], 0.0)
+
+
+def _optional_features(store, day: str, prices: dict, anchor: float) -> dict[str, float]:
+    found = {}
+    raw = {}
+    for name, key in OPTIONAL_RAW.items():
+        if prices.get(name) is None:
+            continue
+        raw[key] = float(prices[name])
+        previous = store.previous_snapshot(key, day)
+        if previous is not None:
+            found[name] = float(prices[name]) - previous
+    if raw:
+        store.save_snapshots(day, raw)
+    if prices.get("gift") is not None:
+        found["gift"] = float(prices["gift"]) - anchor
+    pcr = store.last_session_pcr(day)
+    if pcr is not None:
+        store.save_snapshots(day, {"pcr_px": pcr})
+        previous = store.previous_snapshot("pcr_px", day)
+        if previous is not None:
+            found["pcr"] = pcr - previous
+    return found
+
+
+def _topic_name(phrase: str) -> str:
+    return "topic:" + phrase
+
+
+def _driver_label(name: str) -> str:
+    if name.startswith("topic:"):
+        return name.split(":", 1)[1]
+    return LABELS.get(name, name)
 
 
 def _seed(store) -> None:

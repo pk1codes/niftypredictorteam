@@ -46,6 +46,30 @@ def query_for(hour: int) -> str:
     return QUERIES[hour % len(QUERIES)]
 
 
+def gather_stories(fetch) -> list[str]:
+    """Top stories from every query. Each query keeps at most eight."""
+    titles = []
+    seen = set()
+    for query in QUERIES:
+        for row in list(fetch(query) or [])[:8]:
+            title = (row.get("title") or "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            titles.append(title)
+    return titles
+
+
+def search_all(client: httpx.Client) -> list[str]:
+    def fetch(query: str) -> list[dict]:
+        try:
+            return search_web(client, query)
+        except (httpx.HTTPError, ValueError):
+            return []
+
+    return gather_stories(fetch)
+
+
 def scout_sentence(stories: int, sources: int, failed: bool = False) -> str:
     if failed:
         return "Scout looked across the web. The search did not answer."

@@ -60,10 +60,11 @@ from niftyteam.horizons import (
 )
 from niftyteam.models import Claim, Ensemble, Source
 from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
-from niftyteam.scout import query_for, scout_sentence, search_web
+from niftyteam.scout import query_for, scout_sentence, search_all, search_web
 from niftyteam.search import domain_of, fetch_feed, fetch_gift, fetch_level, fetch_price, fresh, hrefs
 
 AHEAD_FEEDS = {"brent": "BZ=F", "usdinr": "INR=X", "es": "ES=F"}
+OPTIONAL_FEEDS = {"gold": "GC=F", "indiavix": "^INDIAVIX"}
 from niftyteam.store import Store
 
 
@@ -172,7 +173,7 @@ def tick(root=None) -> int:
             boss,
         )
         _score(store, config, stamp, bars)
-        run_ahead(store, stamp, bars, _ahead_prices)
+        run_ahead(store, stamp, bars, _ahead_bundle(store), _ahead_stories)
         _report_limits(
             store,
             stamp,
@@ -919,6 +920,44 @@ def _saved_notes(store: Store) -> list[str]:
     return [note for note in notes if isinstance(note, str)]
 
 
+def _ahead_bundle(store: Store):
+    def fetch() -> dict[str, float] | None:
+        prices = _ahead_prices()
+        if prices is None:
+            return None
+        prices.update(_optional_prices())
+        gift = store.meta("gift_nifty")
+        if gift:
+            prices["gift"] = float(gift)
+        return prices
+
+    return fetch
+
+
+def _ahead_stories() -> list[str]:
+    try:
+        with httpx.Client(follow_redirects=True, headers={"User-Agent": "niftyteam/0.1"}) as client:
+            return search_all(client)
+    except (httpx.HTTPError, ValueError):
+        return []
+
+
+def _optional_prices() -> dict[str, float]:
+    found = {}
+    try:
+        with httpx.Client(timeout=12, headers={"User-Agent": "niftyteam/0.1"}) as client:
+            for name, symbol in OPTIONAL_FEEDS.items():
+                try:
+                    value = fetch_level(client, symbol)
+                except (httpx.HTTPError, KeyError, ValueError, TypeError, IndexError):
+                    continue
+                if value is not None:
+                    found[name] = float(value)
+    except (httpx.HTTPError, KeyError, ValueError, TypeError, IndexError):
+        return found
+    return found
+
+
 def _ahead_prices() -> dict[str, float] | None:
     found = {}
     try:
@@ -939,6 +978,8 @@ def _print_board(store: Store) -> None:
     view = ahead_view(store)
     if view is not None:
         print(f"Next close {view['move']:+.0f}  due {view['due']}")
+        if view.get("note"):
+            print(view["note"])
     if opened:
         print(f"Open {opened.mu:+.0f}  spread {opened.sigma:.0f}")
     if latest:

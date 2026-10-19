@@ -216,10 +216,13 @@ def _ahead_html(ahead: dict | None) -> str:
         )
     body = "\n".join(rows) or "<p class='due'>No drivers yet.</p>"
     due = escape(str(ahead.get("due") or ""))
+    note = escape(str(ahead.get("note") or ""))
+    note_html = f"<p class='due'>{note}</p>" if note else ""
     return (
         "<section class='ahead'>"
         f"<h2>Next close <span class='impact {impact_class(total)}' data-ahead='{total}'>{impact_text(total)}</span></h2>"
         f"<p class='due'>Due {due}</p>"
+        f"{note_html}"
         f"{body}"
         "</section>"
     )

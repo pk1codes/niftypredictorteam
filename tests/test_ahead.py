@@ -7,11 +7,14 @@ import pytest
 from niftyteam.ahead import (
     choose_published,
     consider_edit,
+    improvement_note,
     judge_due,
     project,
     run_ahead,
     scored_samples,
+    settle_phrases,
 )
+from niftyteam.scout import QUERIES, gather_stories
 from niftyteam.chart import render_page
 from niftyteam.config import IST
 from niftyteam.horizons import decision_due
@@ -181,6 +184,123 @@ def test_driver_edits_use_days_outside_the_latest_window():
     assert added != "signal"
     _kept, _probation, changed = consider_edit(samples, ["signal", "noise"], [], samples[-5]["day"])
     assert changed is None
+
+
+def test_every_query_keeps_eight_stories():
+    def fetch(query):
+        return [{"title": f"{query} {index}"} for index in range(9)]
+
+    titles = gather_stories(fetch)
+    assert len(titles) == 8 * len(QUERIES)
+    assert titles[0] == f"{QUERIES[0]} 0"
+    assert f"{QUERIES[0]} 8" not in titles
+
+
+def test_a_new_phrase_has_direction_and_no_points(tmp_path):
+    store = _ready(tmp_path)
+    stamp = datetime(2026, 10, 19, 16, 35, tzinfo=IST)
+    run_ahead(
+        store,
+        stamp,
+        _bars("2026-10-19", [100, 110, 120, 130, 140, 150, 160, 170]),
+        lambda: {"es": 5100.0, "usdinr": 85.0, "brent": 72.0},
+        lambda: ["Crude supply rises sharply", "Cabinet meets on Tuesday"],
+    )
+    assert store.topic("crude supply rises")["direction"] == 1
+    assert "topic:crude supply rises" not in store.snapshots("2026-10-19")
+    assert store.ahead_call("2026-10-19")["predicted_move"] == 0
+    assert json.loads(store.ahead_call("2026-10-19")["parts"]) == [
+        ["Five sessions", 0.0],
+        ["US futures", 0.0],
+        ["Rupee", 0.0],
+        ["Brent", 0.0],
+        ["Base", 0.0],
+    ]
+    store.close()
+
+
+def test_the_same_phrase_updates_the_same_topic(tmp_path):
+    store = _ready(tmp_path)
+    titles = lambda: ["Crude supply rises sharply"]
+    bare = lambda: {"es": 5100.0, "usdinr": 85.0, "brent": 72.0}
+    with_gold = lambda: {"es": 5100.0, "usdinr": 85.0, "brent": 72.0, "gold": 2000.0}
+    run_ahead(store, datetime(2026, 10, 19, 16, 35, tzinfo=IST), _bars("2026-10-19", [100, 110, 120, 130, 140, 150, 160, 170]), bare, titles)
+    assert store.ahead_call("2026-10-19") is not None
+    assert "gold" not in store.snapshots("2026-10-19")
+    run_ahead(store, datetime(2026, 10, 20, 16, 35, tzinfo=IST), _bars("2026-10-20", [100, 110, 120, 130, 140, 150, 160, 180]), with_gold, titles)
+    assert store.conn.execute("SELECT COUNT(*) AS n FROM ahead_topics").fetchone()["n"] == 1
+    assert store.snapshots("2026-10-20")["topic:crude supply rises"] == 1
+    assert store.conn.execute(
+        "SELECT status FROM ahead_drivers WHERE name = ?",
+        ("topic:crude supply rises",),
+    ).fetchone()["status"] == "probation"
+    assert "gold" in store.snapshots("2026-10-20")
+    store.close()
+
+
+def test_three_misses_in_five_fade_the_phrase(tmp_path):
+    store = Store(tmp_path / "ahead.sqlite")
+    phrase = "crude supply rises"
+    store.ensure_topic(phrase, 1)
+    for index, actual in enumerate((10, -10, -10, 10, -10)):
+        day = (date(2026, 10, 1) + timedelta(days=index)).isoformat()
+        store.save_topic_day(day, phrase, 1)
+        settle_phrases(store, day, actual)
+    topic = store.topic(phrase)
+    assert topic["alive"] == 0
+    assert topic["direction"] == 0
+    assert topic["misses"] == 3
+    store.close()
+
+
+def test_a_repeated_phrase_joins_only_through_the_error_test(tmp_path):
+    store = _ready(tmp_path)
+    name = "topic:crude supply rises"
+    for index in range(40):
+        day = (date(2026, 1, 1) + timedelta(days=index)).isoformat()
+        signal = 1.0 if index % 2 == 0 else -1.0
+        store.add_ahead_call(day, 1000, day, 0, 80.0 * signal, 30, "[]")
+        store.finish_ahead(day, 80.0 * signal, "scored")
+        store.save_snapshots(
+            day,
+            {"nifty5": 0.0, "es": 0.0, "usdinr": 0.0, "brent": 0.0, name: signal},
+        )
+        store.save_topic_day(day, "crude supply rises", int(signal))
+    store.ensure_topic("crude supply rises", 1)
+    stamp = datetime(2026, 10, 19, 16, 35, tzinfo=IST)
+    run_ahead(
+        store,
+        stamp,
+        _bars("2026-10-19", [100, 110, 120, 130, 140, 150, 160, 170]),
+        lambda: {"es": 5100.0, "usdinr": 85.0, "brent": 72.0},
+        lambda: ["Crude supply rises sharply"],
+    )
+    call = store.ahead_call("2026-10-19")
+    assert call["predicted_move"] == 0
+    assert store.conn.execute(
+        "SELECT status FROM ahead_drivers WHERE name = ?",
+        (name,),
+    ).fetchone()["status"] == "kept"
+    store.close()
+
+
+def test_the_page_names_a_worse_window(tmp_path):
+    store = Store(tmp_path / "ahead.sqlite")
+    for index in range(40):
+        day = (date(2026, 1, 1) + timedelta(days=index)).isoformat()
+        model = 0 if index < 20 else 9
+        store.add_ahead_call(day, 1000, day, 0, model, 30, "[]")
+        store.finish_ahead(day, 10, "scored")
+    assert improvement_note(store) == "Better than the previous 20"
+    page = render_page(None, [], [], None, 0, ahead={"move": 0, "parts": [], "due": "2026-10-20", "note": improvement_note(store)})
+    assert "Better than the previous 20" in page
+    store.close()
+
+
+def _ready(tmp_path):
+    store = Store(tmp_path / "ahead.sqlite")
+    store.save_snapshots("2026-10-16", {"es_px": 5000.0, "usdinr_px": 84.0, "brent_px": 70.0, "gold_px": 1900.0})
+    return store
 
 
 def _scored(index: int, train_n: int, actual: float, model: float, day: str | None = None) -> dict:

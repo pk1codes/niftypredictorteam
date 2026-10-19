@@ -115,7 +115,9 @@ CREATE TABLE IF NOT EXISTS ahead_calls (
     train_n INTEGER NOT NULL DEFAULT 0,
     actual_move REAL,
     status TEXT NOT NULL,
-    parts TEXT NOT NULL DEFAULT ''
+    parts TEXT NOT NULL DEFAULT '',
+    model_abs REAL,
+    base_abs REAL
 );
 CREATE TABLE IF NOT EXISTS ahead_snapshots (
     day TEXT NOT NULL,
@@ -127,6 +129,20 @@ CREATE TABLE IF NOT EXISTS ahead_drivers (
     name TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     contribution REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ahead_topics (
+    phrase TEXT PRIMARY KEY,
+    direction INTEGER NOT NULL,
+    hits INTEGER NOT NULL DEFAULT 0,
+    misses INTEGER NOT NULL DEFAULT 0,
+    alive INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS ahead_topic_days (
+    day TEXT NOT NULL,
+    phrase TEXT NOT NULL,
+    direction INTEGER NOT NULL,
+    scored INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, phrase)
 );
 """
 
@@ -514,14 +530,94 @@ class Store:
         return cursor.rowcount == 1
 
     def finish_ahead(self, day: str, actual: float | None, status: str) -> None:
+        if actual is None:
+            self.conn.execute(
+                """
+                UPDATE ahead_calls SET status = ?
+                WHERE day = ? AND status = 'open'
+                """,
+                (status, day),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE ahead_calls
+                SET actual_move = ?, status = ?,
+                    model_abs = abs(? - model_move),
+                    base_abs = abs(?)
+                WHERE day = ? AND status = 'open'
+                """,
+                (actual, status, actual, actual, day),
+            )
+        self.conn.commit()
+
+    def topic(self, phrase: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM ahead_topics WHERE phrase = ?", (phrase,)).fetchone()
+
+    def topic_seen_before(self, phrase: str, day: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 AS hit FROM ahead_topic_days WHERE phrase = ? AND day < ? LIMIT 1",
+            (phrase, day),
+        ).fetchone()
+        return row is not None
+
+    def save_topic_day(self, day: str, phrase: str, direction: int) -> None:
         self.conn.execute(
             """
-            UPDATE ahead_calls SET actual_move = ?, status = ?
-            WHERE day = ? AND status = 'open'
+            INSERT INTO ahead_topic_days (day, phrase, direction) VALUES (?, ?, ?)
+            ON CONFLICT(day, phrase) DO NOTHING
             """,
-            (actual, status, day),
+            (day, phrase, direction),
         )
         self.conn.commit()
+
+    def ensure_topic(self, phrase: str, direction: int) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO ahead_topics (phrase, direction) VALUES (?, ?)
+            ON CONFLICT(phrase) DO NOTHING
+            """,
+            (phrase, direction),
+        )
+        self.conn.commit()
+
+    def topic_days_on(self, day: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM ahead_topic_days WHERE day = ? ORDER BY phrase",
+            (day,),
+        ).fetchall()
+
+    def mark_topic_day(self, day: str, phrase: str) -> None:
+        self.conn.execute(
+            "UPDATE ahead_topic_days SET scored = 1 WHERE day = ? AND phrase = ?",
+            (day, phrase),
+        )
+        self.conn.commit()
+
+    def mark_topic(self, phrase: str, hit: bool) -> None:
+        column = "hits" if hit else "misses"
+        self.conn.execute(
+            f"UPDATE ahead_topics SET {column} = {column} + 1 WHERE phrase = ?",
+            (phrase,),
+        )
+        self.conn.commit()
+
+    def fade_topic(self, phrase: str) -> None:
+        self.conn.execute("UPDATE ahead_topics SET alive = 0, direction = 0 WHERE phrase = ?", (phrase,))
+        self.conn.commit()
+
+    def last_session_pcr(self, day: str) -> float | None:
+        rows = self.conn.execute(
+            """
+            SELECT oi_pcr FROM pcr_snapshots
+            WHERE session_date = ? AND bucket = 'week' AND substr(ts, 12, 5) <= '15:30'
+            ORDER BY ts
+            """,
+            (day,),
+        ).fetchall()
+        if not rows:
+            return None
+        return float(rows[-1]["oi_pcr"])
 
     def save_snapshots(self, day: str, values: dict[str, float]) -> None:
         self.conn.executemany(
@@ -602,6 +698,7 @@ class Store:
         )
         self._migrate_columns("misses", {"kind": "TEXT NOT NULL DEFAULT ''", "sign": "INTEGER NOT NULL DEFAULT 0"})
         self._migrate_columns("family_pairs", {"clean": "INTEGER NOT NULL DEFAULT 0"})
+        self._migrate_columns("ahead_calls", {"model_abs": "REAL", "base_abs": "REAL"})
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(events)")}
         if "issue" not in cols:
             self.conn.execute("ALTER TABLE events ADD COLUMN issue INTEGER NOT NULL DEFAULT 0")
