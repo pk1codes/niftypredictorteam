@@ -38,6 +38,9 @@ def render_page(
     status = _status(last_run)
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True)
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr")
+    called = _compare_html(ensemble, nifty)
+    outlook = _ahead_html(ahead)
+    split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -45,100 +48,125 @@ def render_page(
 <meta http-equiv="refresh" content="60">
 <title>Nifty board</title>
 <style>
-  body {{ margin: 0; background: #f6f4ef; color: #1c1915; font: 16px/1.45 Georgia, "Iowan Old Style", serif; }}
-  main {{ max-width: 880px; margin: 0 auto; padding: 28px 20px 64px; }}
-  h1 {{ font-size: 28px; font-weight: 600; margin: 0 0 4px; }}
-  .sub {{ color: #5e584f; margin: 0 0 10px; }}
-  .status {{ display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; font: 14px/1.3 ui-sans-serif, sans-serif; color: #5e584f; }}
-  .light {{ width: 12px; height: 12px; border-radius: 50%; background: #b9b2a6; display: inline-block; flex: none; }}
+  body {{ margin: 0; background: #f3f0ea; color: #1c1915; font: 16px/1.45 Georgia, "Iowan Old Style", serif; }}
+  main {{ max-width: 1040px; margin: 0 auto; padding: 28px 20px 72px; }}
+  .mast {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 16px; }}
+  h1 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #746c62; }}
+  .sub {{ margin: 4px 0 0; color: #1c1915; font: 600 36px/1.05 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .status {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; padding: 7px 12px 7px 10px; background: #fff; border: 1px solid #e4ddd2; border-radius: 999px; font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; }}
+  .light {{ width: 10px; height: 10px; border-radius: 50%; background: #b9b2a6; display: inline-block; flex: none; }}
   .light.on {{ background: #0c7a3a; animation: pulse 1.6s infinite; }}
   @keyframes pulse {{
     0% {{ box-shadow: 0 0 0 0 rgba(12, 122, 58, .45); }}
     70% {{ box-shadow: 0 0 0 8px rgba(12, 122, 58, 0); }}
     100% {{ box-shadow: 0 0 0 0 rgba(12, 122, 58, 0); }}
   }}
-  .state {{ color: #1c1915; }}
-  .stats {{ display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 8px; }}
-  .stats div {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 10px; padding: 10px 14px; min-width: 120px; }}
-  .stats span {{ display: block; color: #746c62; font: 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; }}
-  .note {{ color: #746c62; font-size: 14px; }}
-  .top {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; margin-bottom: 16px; }}
-  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 8px 8px 0; }}
-  .top figure {{ margin: 0; }}
-  figcaption {{ font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; padding: 4px 8px 10px; }}
-  .mark-spot {{ color: #0c7a3a; }}
-  .mark-gift {{ color: #b86e00; }}
-  .mark-next {{ color: #1d4e89; }}
-  .mark-mean {{ color: #6b3fa0; }}
+  .state {{ color: #1c1915; font-weight: 650; }}
+  .stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; }}
+  .stats .tile {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 12px 14px; min-width: 0; }}
+  .stats .tile.plus {{ background: #f3faf6; border-color: #d5eadc; }}
+  .stats .tile.minus {{ background: #fdf6f5; border-color: #f0d6d3; }}
+  .stats span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
+  .stats strong {{ display: block; margin-top: 4px; font: 600 22px/1.2 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .note {{ margin: 0 0 16px; padding: 10px 12px; background: #f7f3fb; border: 1px solid #e4d8f2; border-radius: 10px; color: #5c4d73; font: 14px/1.4 ui-sans-serif, sans-serif; }}
+  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 8px 8px 0; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  figure.errors {{ box-shadow: inset 0 3px 0 #c4b8a8; }}
+  figure.errors svg {{ max-height: 260px; }}
+  figcaption {{ font: 13px/1.45 ui-sans-serif, sans-serif; color: #5e584f; padding: 6px 8px 12px; }}
+  .mark-spot {{ color: #0c7a3a; font-weight: 650; }}
+  .mark-gift {{ color: #b86e00; font-weight: 650; }}
+  .mark-next {{ color: #1d4e89; font-weight: 650; }}
+  .mark-mean {{ color: #6b3fa0; font-weight: 650; }}
   svg {{ width: 100%; height: auto; display: block; }}
-  .roster {{ margin-top: 18px; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
-  .roster-head {{ display: flex; justify-content: space-between; padding: 12px 14px 4px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
-  .matters {{ display: grid; gap: 10px; margin: 0 0 16px; }}
-  .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 10px 14px 6px; }}
-  .matters h2 {{ margin: 0 0 6px; display: flex; justify-content: space-between; align-items: baseline; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
-  .matters h2 .impact {{ letter-spacing: 0; }}
-  .matter {{ display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid #f0ebe3; }}
+  .split, .desk {{ display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; align-items: start; margin: 0 0 16px; }}
+  .split > :only-child {{ grid-column: 1 / -1; }}
+  .roster, .learn {{ margin: 0; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; overflow: hidden; }}
+  .roster {{ box-shadow: inset 3px 0 0 #9a9186; }}
+  .learn {{ box-shadow: inset 3px 0 0 #6b3fa0; }}
+  .roster-head {{ display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px 2px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
+  .count {{ color: #0c7a3a; letter-spacing: 0; }}
+  .count.short {{ color: #8a5a00; }}
+  .deck {{ margin: 0 0 8px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
+  .roster .deck, .learn .deck {{ padding: 0 14px 8px; }}
+  .matters {{ display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; align-items: start; margin: 0 0 16px; }}
+  .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 12px 14px 10px; }}
+  .matters section:first-child {{ box-shadow: inset 3px 0 0 #1d4e89; }}
+  .matters section:last-child {{ box-shadow: inset 3px 0 0 #c4a574; }}
+  .matters h2, .ahead h2 {{ margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
+  .matters h2 .impact, .ahead h2 .impact {{ letter-spacing: 0; font-size: 22px; }}
+  .matter {{ display: flex; gap: 10px; align-items: baseline; padding: 8px; margin-top: 6px; border-radius: 8px; }}
+  .matter.ok {{ background: #f7f8f6; }}
+  .matter.idle {{ background: #fbf6ee; }}
+  .matter.bad {{ background: #fdf4f3; }}
   .matter.bad .line {{ color: #8a1c1c; }}
   .matter.idle .line {{ color: #8a5a00; }}
   .agent {{ display: flex; gap: 10px; align-items: baseline; padding: 8px 14px; border-top: 1px solid #f0ebe3; }}
-  .agent.idle {{ background: #fff6e8; }}
-  .agent.bad {{ background: #fdecea; }}
-  .dot {{ width: 8px; height: 8px; border-radius: 50%; background: #b9b2a6; flex: none; }}
+  .agent.ok {{ box-shadow: inset 3px 0 0 #cfe8d8; }}
+  .agent.idle {{ background: #fbf6ee; box-shadow: inset 3px 0 0 #e4c48a; }}
+  .agent.bad {{ background: #fdf4f3; box-shadow: inset 3px 0 0 #e7b4ae; }}
+  .dot {{ width: 8px; height: 8px; border-radius: 50%; background: #b9b2a6; flex: none; align-self: center; }}
   .dot.ok {{ background: #0c7a3a; }}
-  .dot.bad {{ background: #c47b00; }}
-  .name {{ width: 72px; flex: none; font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; }}
-  .line {{ flex: 1; }}
-  .trail, .score {{ margin: 0; padding: 8px 14px; border-top: 1px solid #f0ebe3; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
-  .score {{ color: #1c1915; }}
-  .impact {{ flex: none; min-width: 52px; text-align: right; font: 600 16px/1 ui-sans-serif, sans-serif; }}
+  .dot.idle {{ background: #b86e00; }}
+  .dot.bad {{ background: #c62828; }}
+  .name {{ width: 84px; flex: none; font: 600 13px/1.3 ui-sans-serif, sans-serif; color: #3f3a34; }}
+  .line {{ flex: 1; min-width: 0; }}
+  .trail, .score {{ margin: 0; padding: 8px 14px; border-top: 1px solid #f0ebe3; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .score {{ color: #1c1915; background: #f7f3fb; }}
+  .impact {{ flex: none; min-width: 52px; text-align: right; font: 600 16px/1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .matter .impact, .agent .impact, .off .impact {{ padding: 2px 8px; border-radius: 999px; background: #f4f1ea; }}
   .plus {{ color: #0c7a3a; }}
   .minus {{ color: #c62828; }}
-  .flat {{ color: #1c1915; }}
-  .empty {{ padding: 16px; color: #746c62; }}
-  .learn {{ margin-top: 12px; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
+  .flat {{ color: #5e584f; }}
+  .matter .plus, .agent .plus, .off .plus {{ background: #e7f5ec; }}
+  .matter .minus, .agent .minus, .off .minus {{ background: #fdeceb; }}
+  .empty {{ margin: 0; padding: 16px; color: #746c62; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
   .learn .agent .line {{ color: #746c62; }}
-  .learn .up {{ color: #0c7a3a; }}
-  .learn .down {{ color: #c62828; }}
-  .ahead {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 10px 14px 6px; }}
-  .ahead h2 {{ margin: 0 0 6px; display: flex; justify-content: space-between; align-items: baseline; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
-  .ahead h2 .impact {{ letter-spacing: 0; }}
-  .ahead .name {{ width: 120px; }}
-  .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
-  .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 8px; }}
-  .compare .from, .compare .off {{ margin: 0 0 8px; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
-  .compare .off {{ margin: 4px 0 8px; }}
-  .compare .pair {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-  .compare .pair span {{ display: block; color: #746c62; font: 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; }}
-  .compare .pair strong {{ display: block; margin-top: 2px; font: 600 28px/1.15 ui-sans-serif, sans-serif; }}
+  .learn .agent .line.up {{ color: #0c7a3a; font-weight: 650; }}
+  .learn .agent .line.down {{ color: #c62828; font-weight: 650; }}
+  .ahead, .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0; padding: 12px 14px 10px; box-shadow: inset 0 3px 0 #1d4e89; }}
+  .ahead .name {{ width: auto; flex: 1; }}
+  .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
+  .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
+  .compare .from, .compare .off {{ margin: 0 0 8px; color: #5e584f; font: 13px/1.35 ui-sans-serif, sans-serif; }}
+  .compare .off {{ margin: 10px 0 2px; font-size: 15px; color: #1c1915; }}
+  .compare .pair {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+  .compare .pair > div {{ border-radius: 10px; padding: 10px 12px; }}
+  .compare .called {{ background: #f4f7fb; }}
+  .compare .live {{ background: #f3faf6; }}
+  .compare .pair span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
+  .compare .pair strong {{ display: block; margin-top: 4px; font: 600 28px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
   .compare .pair em {{ font-style: normal; }}
-  .spark {{ width: 72px; height: 16px; flex: none; }}
-  @media (max-width: 720px) {{
-    .top {{ grid-template-columns: 1fr; }}
+  .spark {{ width: 72px; height: 16px; flex: none; color: #6b3fa0; }}
+  @media (max-width: 800px) {{
+    .mast {{ flex-direction: column; align-items: flex-start; }}
+    .sub {{ font-size: 30px; }}
+    .split, .matters, .desk, .compare .pair, .stats {{ grid-template-columns: 1fr; }}
     .compare .pair strong {{ font-size: 22px; }}
   }}
 </style>
 </head>
 <body>
 <main>
-  <div class="top">
+  <header class="mast">
     <div>
       <h1>Nifty board</h1>
       <p class="sub">{escape(level)}</p>
-      {status}
-      <div class="stats">
-        {gift_tile}
-        {fii_tile}
-      </div>
-      {early}
     </div>
-    <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
+    {status}
+  </header>
+  <div class="stats">
+    {gift_tile}
+    {fii_tile}
   </div>
-  {_compare_html(ensemble, nifty)}
-  {_ahead_html(ahead)}
+  {early}
+  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
+  {split}
   {_matters(events)}
-  <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
-  {log}
-  {learning}
+  <figure class="errors">{errors}<figcaption>How far the real move landed from the call. The dashed line is the average miss. The curve appears once scores exist.</figcaption></figure>
+  <div class="desk">
+    {log}
+    {learning}
+  </div>
 </main>
 <script>
 const lastRaw = document.getElementById("status").dataset.last;
@@ -205,7 +233,7 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
             number = int(round(value))
             shown = f"{number:+,}{suffix}"
         kind = impact_class(0 if tint is None else tint)
-    return f"<div><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
+    return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
 
 
 def _compare_html(ensemble: Ensemble | None, nifty: float | None) -> str:
@@ -224,16 +252,17 @@ def _compare_html(ensemble: Ensemble | None, nifty: float | None) -> str:
     return (
         "<section class='compare' aria-label='Called against Nifty'>"
         f"<p class='from'>Called from {_level_text(anchor)}</p>"
+        "<p class='deck'>Blue is the call. Green is the live index.</p>"
         "<div class='pair'>"
-        "<div><span>Predicted now</span>"
+        "<div class='called'><span>Predicted now</span>"
         f"<strong>{_level_text(predicted)}</strong>"
         f"<em class='impact {impact_class(ensemble.mu)}'>{impact_text(ensemble.mu)}</em></div>"
-        "<div><span>Nifty 50 now</span>"
+        "<div class='live'><span>Nifty 50 now</span>"
         f"<strong>{now_level}</strong>"
         f"<em class='impact {now_class}'>{now_change}</em></div>"
         "</div>"
-        f"{_compare_bar(anchor, predicted, nifty)}"
         f"{off}"
+        f"{_compare_bar(anchor, predicted, nifty)}"
         "</section>"
     )
 
@@ -307,6 +336,7 @@ def _ahead_html(ahead: dict | None) -> str:
         f"<h2>Next close <span class='impact {impact_class(total)}' data-ahead='{total}'>{impact_text(total)}</span></h2>"
         f"<p class='due'>Due {due}</p>"
         f"{note_html}"
+        "<p class='deck'>Pieces of the next session’s move.</p>"
         f"{body}"
         "</section>"
     )
@@ -346,8 +376,12 @@ def _matters(events: list[Event]) -> str:
     watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
     return (
         "<div class='matters'>"
-        f"<section><h2>Moving the forecast{_mover_total(moving)}</h2>{move_html}</section>"
-        f"<section><h2>Quiet or stuck</h2>{watch_html}</section>"
+        f"<section><h2>Moving the forecast{_mover_total(moving)}</h2>"
+        "<p class='deck'>Points these stories added to the call.</p>"
+        f"{move_html}</section>"
+        f"<section><h2>Quiet or stuck</h2>"
+        "<p class='deck'>Amber is waiting. Red had no answer.</p>"
+        f"{watch_html}</section>"
         "</div>"
     )
 
@@ -391,9 +425,12 @@ def _activity(events: list[Event]) -> str:
     score = next((event for event in latest if event.agent == SCORE_AGENT), None)
     score_html = f"<p class='score'>{escape(score.sentence)}</p>" if score else ""
     trail = "\n".join(_trail_line(stamp, grouped[stamp]) for stamp in order[1:7])
+    checked = _checked(latest)
+    tone = "count" if checked == 8 else "count short"
     return (
         "<section class='roster'>"
-        f"<div class='roster-head'><span>Agents</span><span>{_checked(latest)} of 8</span></div>"
+        f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
+        "<p class='deck'>Green answered. Amber is quiet. Red is stuck.</p>"
         f"{_roster_rows(latest)}{score_html}{trail}"
         "</section>"
     )
@@ -403,7 +440,11 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     series = agent_misses(claims, ensembles)
     names = list(ROSTER) + [(BOARD_AGENT, "Board")]
     rows = "\n".join(_learn_row(name, series.get(key) or []) for key, name in names)
-    return f"<section class='learn'><div class='roster-head'><span>Learning</span></div>{rows}</section>"
+    return (
+        "<section class='learn'><div class='roster-head'><span>Learning</span></div>"
+        "<p class='deck'>How far each agent’s usual miss has shifted.</p>"
+        f"{rows}</section>"
+    )
 
 
 def _learn_row(name: str, misses: list[float]) -> str:
