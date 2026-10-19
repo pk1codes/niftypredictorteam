@@ -166,6 +166,7 @@ def test_score_updates_weight_and_chart_colors():
     assert "+1,166 cr" in page
     assert "class='impact minus'>-60" in page
     assert "class='impact plus'>+20" in page
+    assert "<h2>Moving the forecast<span class='impact minus'>-40</span></h2>" in page
     assert impact_class(0) == "flat"
     assert "class='light on'" in page
     assert f"Last run {stamp.strftime('%d %b %H:%M')}" in page

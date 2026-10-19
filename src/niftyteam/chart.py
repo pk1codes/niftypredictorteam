@@ -74,7 +74,8 @@ def render_page(
   .roster-head {{ display: flex; justify-content: space-between; padding: 12px 14px 4px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
   .matters {{ display: grid; gap: 10px; margin: 0 0 16px; }}
   .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 10px 14px 6px; }}
-  .matters h2 {{ margin: 0 0 6px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .matters h2 {{ margin: 0 0 6px; display: flex; justify-content: space-between; align-items: baseline; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .matters h2 .impact {{ letter-spacing: 0; }}
   .matter {{ display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid #f0ebe3; }}
   .matter.bad .line {{ color: #8a1c1c; }}
   .matter.idle .line {{ color: #8a5a00; }}
@@ -223,17 +224,29 @@ def _matters(events: list[Event]) -> str:
     watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
     return (
         "<div class='matters'>"
-        f"<section><h2>Moving the forecast</h2>{move_html}</section>"
+        f"<section><h2>Moving the forecast{_mover_total(moving)}</h2>{move_html}</section>"
         f"<section><h2>Quiet or stuck</h2>{watch_html}</section>"
         "</div>"
     )
+
+
+def _mover_total(rows: list[tuple[str, str, str, float]]) -> str:
+    shown = [impact for _name, sentence, kind, impact in rows if _shows_impact(kind, sentence)]
+    if not shown:
+        return ""
+    total = sum(shown)
+    return f"<span class='impact {impact_class(total)}'>{impact_text(total)}</span>"
+
+
+def _shows_impact(kind: str, sentence: str) -> bool:
+    return kind == "ok" and not sentence.startswith("Restarted")
 
 
 def _matter_rows(rows: list[tuple[str, str, str, float]]) -> str:
     html = []
     for name, sentence, kind, impact in rows:
         points = ""
-        if kind == "ok" and not sentence.startswith("Restarted"):
+        if _shows_impact(kind, sentence):
             points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
         html.append(
             f"<div class='matter {kind}'><span class='name'>{escape(name)}</span>"
