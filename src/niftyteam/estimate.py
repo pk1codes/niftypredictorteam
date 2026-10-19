@@ -50,6 +50,70 @@ HEAVY_PATTERNS = (
 )
 
 
+TIP_BITS = (
+    "penny",
+    " ipo",
+    "ipo ",
+    "preview",
+    "where should",
+    "can nifty",
+    "factors to",
+    "picks",
+    "are watching",
+    "exposure to",
+    "stocks with",
+    "retail investors",
+    "ex-record",
+    "time to",
+    "should you",
+    "here's why",
+    "here is why",
+)
+
+OFF_MARKET = re.compile(
+    r"\b(box office|bollywood|film|movie|actor|actress|cricket|ipl|football|tennis|horoscope|recipe)\b"
+)
+
+MARKET_HOOK = re.compile(
+    r"\b(nifty|sensex|stock|stocks|share|shares|market|markets|crude|oil|brent|rupee|rbi|repo|"
+    r"fii|fpi|fed|profit|profits|earnings|revenue|results|guidance|buyback|merger|bank)\b"
+)
+
+
+def judge_headline(title: str) -> dict:
+    """Score a Pulse or Tijori story, or set it aside only with a proof it cannot move Nifty."""
+    guess = estimate_headline(title)
+    if guess is not None:
+        return {"verdict": "scored", "guess": guess, "reason": ""}
+    reason = _no_nifty_value(title)
+    if reason:
+        return {"verdict": "discard", "guess": None, "reason": reason}
+    return {"verdict": "keep", "guess": watch_move(title), "reason": "No proof this cannot move Nifty."}
+
+
+def watch_move(title: str) -> dict | None:
+    """A small call when the words have one direction and the story was not set aside."""
+    raw = html.unescape(title).strip()
+    text = " " + raw.lower() + " "
+    up = re.search(r"\b(jump|jumps|jumped|surge|surges|rise|rises|rose|gain|gains|profit|profits|upgrade|upgrades|beat|record)\b", text)
+    down = re.search(r"\b(fall|falls|fell|drop|drops|slide|slides|slump|loss|losses|miss|downgrade|downgrades|slip|slips)\b", text)
+    if bool(up) == bool(down):
+        return None
+    return _band("global", "up" if up else "down", 4, 12, 0.12, raw, f"watch:{headline_kind(raw)}")
+
+
+def _no_nifty_value(title: str) -> str:
+    raw = html.unescape(title).strip()
+    text = " " + raw.lower() + " "
+    if any(bit in text for bit in TIP_BITS):
+        return "A tip or a question, not an event."
+    if any(bit in text for bit in SUPPLY_BITS):
+        return "A dividend or split outside the index heavyweights."
+    if OFF_MARKET.search(text) and not MARKET_HOOK.search(text):
+        return "Sport, cinema, or lifestyle, with no company or market in it."
+    return ""
+
+
 def estimate_headline(title: str) -> dict | None:
     raw = html.unescape(title).strip()
     text = " " + raw.lower() + " "

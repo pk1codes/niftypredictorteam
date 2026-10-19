@@ -42,6 +42,7 @@ from niftyteam.estimate import (
     apply_family_bias,
     estimate_headline,
     fit_move,
+    judge_headline,
     gift_gap_estimate,
     headline_kind,
     level_estimate,
@@ -156,7 +157,7 @@ def tick(root=None) -> int:
             worked.add("levels")
         open_call, ensemble = _publish(store, config, claims, stamp, nifty, worked, last_cash_close(bars, stamp))
         if ensemble is not None and ensemble.ts == stamp.isoformat():
-            pending = store.meta("pending_ignored")
+            pending = _merged_ignored(store)
             if pending:
                 store.set_meta(f"ignored:{ensemble.id}", pending)
         _log_roster(
@@ -281,8 +282,42 @@ def important_view(store: Store) -> list[dict]:
     return [row for row in rows if isinstance(row, dict) and row.get("label")]
 
 
-def _feed_row(source_id: str, label: str, state: str, detail: str) -> dict:
-    return {"id": source_id, "label": label, "state": state, "detail": detail}
+def _feed_row(source_id: str, label: str, state: str, detail: str, lines: list[str] | None = None) -> dict:
+    row = {"id": source_id, "label": label, "state": state, "detail": detail}
+    if lines:
+        row["lines"] = lines
+    return row
+
+
+def _reading(title: str, note: str) -> str:
+    return f"{clip(title, 72)} — {note}"
+
+
+def _save_kept(store: Store, titles: list[str], reset: bool) -> None:
+    prior: list[str] = []
+    if not reset:
+        prior = _saved_titles(store, "pending_watch")
+    merged = prior + [title for title in titles if title not in prior]
+    store.set_meta("pending_watch", json.dumps(merged))
+
+
+def _merged_ignored(store: Store) -> str:
+    titles = _saved_titles(store, "pending_ignored")
+    for title in _saved_titles(store, "pending_watch"):
+        if title not in titles:
+            titles.append(title)
+    return json.dumps(titles) if titles else ""
+
+
+def _saved_titles(store: Store, key: str) -> list[str]:
+    raw = store.meta(key) or ""
+    if not raw:
+        return []
+    try:
+        found = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [title for title in found if isinstance(title, str)]
 
 
 def _feed_detail(stories: int, headline: str) -> str:
@@ -293,6 +328,13 @@ def _feed_detail(stories: int, headline: str) -> str:
     if stories:
         return f"Checked · {stories} stories"
     return "Checked · nothing new"
+
+
+def items_for_feed(items: list[dict], since: datetime, important: bool) -> list[dict]:
+    """Important feeds keep every story. Others keep only what arrived since the last check."""
+    if important:
+        return sorted(items, key=lambda item: item.get("published") or since, reverse=True)
+    return fresh(items, since)
 
 
 def _save_feed_notes(store: Store, config: dict, notes: dict, reset: bool) -> None:
@@ -336,6 +378,7 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
         if row.get("important")
     }
     notes: dict[str, dict] = {}
+    kept_titles: list[str] = []
     for source in sources:
         if source.status == "down":
             down.add(source.beat)
@@ -344,7 +387,8 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
     with httpx.Client(headers={"User-Agent": "Mozilla/5.0 niftyteam/0.1"}, follow_redirects=True) as client:
         for source in live:
             try:
-                items = fresh(fetch_feed(client, source.url), since)
+                fetched = fetch_feed(client, source.url)
+                items = items_for_feed(fetched, since, source.id in watch)
                 source.fail_streak = 0
                 if source.status == "down":
                     source.status = "active"
@@ -361,15 +405,32 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                 continue
             used = ""
             used_abs = -1.0
+            readings: list[str] = []
+            important = source.id in watch
             for item in items:
                 _note_links(store, config, item["summary"], source.beat)
-                if quiet and item["published"] and item["published"] < stamp - timedelta(hours=2):
-                    continue
-                guess = estimate_headline(item["title"])
-                if guess is None:
-                    continue
-                if quiet and abs(guess["midpoint"]) < 40:
-                    continue
+                if important:
+                    judged = judge_headline(item["title"])
+                    if judged["verdict"] == "discard":
+                        readings.append(_reading(item["title"], judged["reason"]))
+                        continue
+                    guess = judged["guess"]
+                    if guess is None:
+                        readings.append(_reading(item["title"], "Kept. No proved direction, so no points."))
+                        kept_titles.append(item["title"])
+                        continue
+                    if judged["verdict"] == "keep":
+                        kept_note = f"Kept, {impact_text(guess['midpoint'])}. Not proved irrelevant."
+                    else:
+                        kept_note = ""
+                else:
+                    if quiet and item["published"] and item["published"] < stamp - timedelta(hours=2):
+                        continue
+                    guess = estimate_headline(item["title"])
+                    if guess is None:
+                        continue
+                    if quiet and abs(guess["midpoint"]) < 40:
+                        continue
                 if soften:
                     guess["confidence"] *= 0.5
                 claim = _make_claim(source, guess, item["url"], stamp, nifty, store)
@@ -378,11 +439,16 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                     prior = best.get(guess["beat"])
                     if prior is None or abs(claim.midpoint) > abs(prior.midpoint):
                         best[guess["beat"]] = claim
-                    if source.id in watch and abs(claim.midpoint) > used_abs:
+                    if important and abs(claim.midpoint) > used_abs:
                         used = claim.headline
                         used_abs = abs(claim.midpoint)
+                if important:
+                    note = kept_note or f"In the call {impact_text(guess['midpoint'])}."
+                    readings.append(_reading(item["title"], note))
             if source.id in watch:
-                notes[source.id] = _feed_row(source.id, watch[source.id], "read", _feed_detail(len(items), used))
+                detail = _feed_detail(len(items), "") if readings else _feed_detail(len(items), used)
+                notes[source.id] = _feed_row(source.id, watch[source.id], "read", detail, readings)
+    _save_kept(store, kept_titles, reset=only is None)
     _save_feed_notes(store, config, notes, reset=only is None)
     lines: dict[str, tuple[str, float]] = {}
     for key, _name in ROSTER:

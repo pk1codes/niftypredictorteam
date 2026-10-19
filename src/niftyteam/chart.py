@@ -138,7 +138,10 @@ def render_page(
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-  .feed {{ display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; }}
+  .feed {{ display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; }}
+  .feed .dot {{ margin-top: 6px; }}
+  .feed .lines {{ flex: 1 0 100%; margin: 2px 0 0; padding: 0 0 0 18px; list-style: disc; }}
+  .feed .lines li {{ margin: 2px 0; color: #3f3a34; font: 13px/1.35 ui-sans-serif, sans-serif; }}
   .feed.ok {{ background: #f3faf6; }}
   .feed.bad {{ background: #fdf4f3; }}
   .feed.idle {{ background: #fbf6ee; }}
@@ -210,10 +213,13 @@ def _feeds_html(feeds: list[dict] | None) -> str:
         kind = "ok" if state == "read" else "bad" if state in {"miss", "down"} else "idle"
         label = str(row.get("label") or "")
         detail = str(row.get("detail") or "")
+        lines = [str(line) for line in row.get("lines") or [] if str(line)]
+        listed = "".join(f"<li>{escape(line)}</li>" for line in lines)
+        extra = f"<ul class='lines'>{listed}</ul>" if listed else ""
         cards.append(
             f"<div class='feed {kind}'><span class='dot {kind}'></span>"
             f"<span class='name'>{escape(label)}</span>"
-            f"<span class='line'>{escape(detail)}</span></div>"
+            f"<span class='line'>{escape(detail)}</span>{extra}</div>"
         )
     return (
         "<section class='feeds' aria-label='Important feeds'>"

@@ -7,7 +7,7 @@ from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, 
 from niftyteam.chart import _mover_total, render_page
 from niftyteam.config import impact_class, load_config
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
-from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
+from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, judge_headline, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
 from niftyteam.learn import call_shift, learning_score, learning_trail
 from niftyteam.horizons import forecast_move, next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
@@ -15,7 +15,7 @@ from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
 from niftyteam.search import feed_items, parse_gift
 from niftyteam.store import Store
-from niftyteam.tick import _fold_feed, _make_claim, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, miss_titles
+from niftyteam.tick import _fold_feed, _make_claim, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, items_for_feed, miss_titles
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -681,6 +681,27 @@ def test_pulse_and_tijori_join_the_agent_feeds():
     assert "tijorialerts.com" in allow
 
 
+def test_pulse_and_tijori_keep_a_story_unless_it_cannot_move_nifty():
+    bank = judge_headline("Axis Bank Q2 profit up 38% on loan growth")
+    assert bank["verdict"] == "keep"
+    assert bank["guess"]["direction"] == "up"
+    chips = judge_headline("Amazon says its AI chips will work with a popular coding language")
+    assert chips["verdict"] == "keep"
+    assert chips["guess"] is None
+    cinema = judge_headline("Prahaar box office collection keeps the momentum going")
+    assert cinema["verdict"] == "discard"
+    assert "cinema" in cinema["reason"]
+    assert judge_headline("Can Nifty rally further?")["verdict"] == "discard"
+    assert judge_headline("8th Pay Commission: 14% Then, 140% Now?")["verdict"] == "keep"
+    assert judge_headline("A small firm declares a dividend")["verdict"] == "discard"
+    scored = judge_headline("Reliance board declares a dividend")
+    assert scored["verdict"] == "scored"
+    old = {"title": "Old Pulse item", "published": datetime(2026, 10, 1, tzinfo=IST), "url": "https://pulse.example/old", "summary": ""}
+    since = datetime(2026, 10, 19, tzinfo=IST)
+    assert items_for_feed([old], since, important=True) == [old]
+    assert items_for_feed([old], since, important=False) == []
+
+
 def test_important_feeds_show_that_they_were_checked():
     page = render_page(
         None,
@@ -689,7 +710,7 @@ def test_important_feeds_show_that_they_were_checked():
         None,
         0,
         feeds=[
-            {"label": "Pulse", "state": "read", "detail": "Checked · 8 stories"},
+            {"label": "Pulse", "state": "read", "detail": "Checked · 8 stories", "lines": ["CoreWeave jumps — Kept, +8. Not proved irrelevant."]},
             {"label": "Tijori", "state": "miss", "detail": "No answer"},
         ],
     )
@@ -697,6 +718,7 @@ def test_important_feeds_show_that_they_were_checked():
     assert "class='feed ok'" in page
     assert "Pulse" in page
     assert "Checked · 8 stories" in page
+    assert "CoreWeave jumps — Kept, +8. Not proved irrelevant." in page
     assert "class='feed bad'" in page
     assert "Tijori" in page
     assert "No answer" in page
