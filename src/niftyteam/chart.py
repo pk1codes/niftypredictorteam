@@ -36,10 +36,10 @@ def render_page(
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
     early = ""
     if scored < 30:
-        early = f"<p class='note'>Early curve. {scored} scored forecasts. The error bell settles after a few dozen checks.</p>"
+        early = f"<p class='note'>Early curve. {scored} scored forecasts. The error bell settles after a few dozen checks, so read it as a sketch.</p>"
     status = _status(last_run)
-    gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True)
-    fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr")
+    gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Offshore Nifty. Plus leans the next open up.")
+    fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
     called = _compare_html(ensemble, history or [], nifty)
     outlook = _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
@@ -47,14 +47,16 @@ def render_page(
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="60">
 <title>Nifty board</title>
 <style>
-  body {{ margin: 0; background: #f3f0ea; color: #1c1915; font: 16px/1.45 Georgia, "Iowan Old Style", serif; }}
-  main {{ max-width: 1040px; margin: 0 auto; padding: 28px 20px 72px; }}
-  .mast {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 16px; }}
+  body {{ margin: 0; background: #efeae3; color: #1c1915; font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; }}
+  main {{ max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }}
+  .mast {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 8px; }}
   h1 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #746c62; }}
   .sub {{ margin: 4px 0 0; color: #1c1915; font: 600 36px/1.05 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .lead {{ margin: 0 0 16px; color: #5e584f; font: 15px/1.4 ui-sans-serif, sans-serif; }}
   .status {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; padding: 7px 12px 7px 10px; background: #fff; border: 1px solid #e4ddd2; border-radius: 999px; font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; }}
   .light {{ width: 10px; height: 10px; border-radius: 50%; background: #b9b2a6; display: inline-block; flex: none; }}
   .light.on {{ background: #0c7a3a; animation: pulse 1.6s infinite; }}
@@ -65,13 +67,14 @@ def render_page(
   }}
   .state {{ color: #1c1915; font-weight: 650; }}
   .stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; }}
-  .stats .tile {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 12px 14px; min-width: 0; }}
+  .stats .tile {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; padding: 14px 16px; min-width: 0; }}
   .stats .tile.plus {{ background: #f3faf6; border-color: #d5eadc; }}
   .stats .tile.minus {{ background: #fdf6f5; border-color: #f0d6d3; }}
   .stats span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
   .stats strong {{ display: block; margin-top: 4px; font: 600 22px/1.2 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .stats em {{ display: block; margin-top: 6px; color: #5e584f; font: 13px/1.35 ui-sans-serif, sans-serif; font-style: normal; }}
   .note {{ margin: 0 0 16px; padding: 10px 12px; background: #f7f3fb; border: 1px solid #e4d8f2; border-radius: 10px; color: #5c4d73; font: 14px/1.4 ui-sans-serif, sans-serif; }}
-  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 8px 8px 0; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 8px 8px 0; box-shadow: inset 0 3px 0 #6b3fa0; }}
   figure.errors {{ box-shadow: inset 0 3px 0 #c4b8a8; }}
   figure.errors svg {{ max-height: 260px; }}
   figcaption {{ font: 13px/1.45 ui-sans-serif, sans-serif; color: #5e584f; padding: 6px 8px 12px; }}
@@ -82,7 +85,7 @@ def render_page(
   svg {{ width: 100%; height: auto; display: block; }}
   .split, .desk {{ display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; align-items: start; margin: 0 0 16px; }}
   .split > :only-child {{ grid-column: 1 / -1; }}
-  .roster, .learn {{ margin: 0; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; overflow: hidden; }}
+  .roster, .learn {{ margin: 0; background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; overflow: hidden; }}
   .roster {{ box-shadow: inset 3px 0 0 #9a9186; }}
   .learn {{ box-shadow: inset 3px 0 0 #6b3fa0; }}
   .roster-head {{ display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px 2px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
@@ -91,7 +94,7 @@ def render_page(
   .deck {{ margin: 0 0 8px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
   .roster .deck, .learn .deck {{ padding: 0 14px 8px; }}
   .matters {{ display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; align-items: start; margin: 0 0 16px; }}
-  .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 12px 14px 10px; }}
+  .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; padding: 14px 16px 12px; }}
   .matters section:first-child {{ box-shadow: inset 3px 0 0 #1d4e89; }}
   .matters section:last-child {{ box-shadow: inset 3px 0 0 #c4a574; }}
   .matters h2, .ahead h2, .compare h2 {{ margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
@@ -128,14 +131,14 @@ def render_page(
   .learn .line.up {{ color: #0c7a3a; font-weight: 650; }}
   .learn .line.down {{ color: #c62828; font-weight: 650; }}
   .learn .wait {{ padding: 2px 14px 14px; margin: 0; }}
-  .ahead, .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0; padding: 12px 14px 10px; box-shadow: inset 0 3px 0 #1d4e89; }}
+  .ahead, .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0; padding: 14px 16px 12px; box-shadow: inset 0 3px 0 #1d4e89; }}
   .ahead .name {{ width: auto; flex: 1; }}
   .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
   .compare .story {{ margin: 8px 0 0; color: #1c1915; font: 16px/1.5 ui-sans-serif, sans-serif; }}
   .compare .story strong {{ font-variant-numeric: tabular-nums; }}
   .learn {{ margin-top: 16px; }}
-  .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
+  .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 16px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
   .feed {{ display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; }}
@@ -164,6 +167,7 @@ def render_page(
     </div>
     {status}
   </header>
+  <p class="lead">One call for the 15:30 close. Green is up. Red is down.</p>
   <div class="stats">
     {gift_tile}
     {fii_tile}
@@ -173,7 +177,7 @@ def render_page(
   <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   {split}
   {_matters(events)}
-  <figure class="errors">{errors}<figcaption>How far the real move landed from the call. The dashed line is the average miss. The curve appears once scores exist.</figcaption></figure>
+  <figure class="errors">{errors}<figcaption>Each past call against what Nifty did. The dashed line is the average miss. The curve appears once scores exist.</figcaption></figure>
   {log}
   {learning}
 </main>
@@ -224,6 +228,7 @@ def _feeds_html(feeds: list[dict] | None) -> str:
     return (
         "<section class='feeds' aria-label='Important feeds'>"
         "<h2>Important feeds</h2>"
+        "<p class='deck'>Every Pulse and Tijori story. Set aside only if it cannot move Nifty.</p>"
         f"<div class='feed-row'>{''.join(cards)}</div></section>"
     )
 
@@ -251,7 +256,7 @@ def _status(last_run: str | None) -> str:
     )
 
 
-def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str = "", points: bool = False) -> str:
+def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str = "", points: bool = False, hint: str = "") -> str:
     if value is None:
         shown = "—"
         kind = "flat"
@@ -266,7 +271,8 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
             number = int(round(value))
             shown = f"{number:+,}{suffix}"
         kind = impact_class(0 if tint is None else tint)
-    return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
+    note = f"<em>{escape(hint)}</em>" if hint else ""
+    return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong>{note}</div>"
 
 
 def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: float | None = None) -> str:
@@ -282,6 +288,7 @@ def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: flo
     return (
         "<section class='compare' aria-label='Called against Nifty'>"
         "<h2>Called</h2>"
+        "<p class='deck'>Last close first. Then the call still open.</p>"
         f"{body}"
         "</section>"
     )
@@ -380,7 +387,7 @@ def _ahead_html(ahead: dict | None) -> str:
         f"<h2>Next close <span class='impact {impact_class(total)}' data-ahead='{total}'>{impact_text(total)}</span></h2>"
         f"<p class='due'>Due {due}</p>"
         f"{note_html}"
-        "<p class='deck'>Pieces of the next session’s move.</p>"
+        "<p class='deck'>What is already in the next session’s move.</p>"
         f"{body}"
         "</section>"
     )
@@ -421,10 +428,10 @@ def _matters(events: list[Event]) -> str:
     return (
         "<div class='matters'>"
         f"<section><h2>Moving the forecast{_mover_total(moving)}</h2>"
-        "<p class='deck'>Points these stories added to the call.</p>"
+        "<p class='deck'>Points these stories added to the call. Bigger numbers moved it more.</p>"
         f"{move_html}</section>"
         f"<section><h2>Quiet or stuck</h2>"
-        "<p class='deck'>Amber is waiting. Red had no answer.</p>"
+        "<p class='deck'>Amber is waiting. Red had no answer. Neither is in the number.</p>"
         f"{watch_html}</section>"
         "</div>"
     )
@@ -474,7 +481,7 @@ def _activity(events: list[Event]) -> str:
     return (
         "<section class='roster'>"
         f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
-        "<p class='deck'>Green answered. Amber is quiet. Red is stuck.</p>"
+        "<p class='deck'>Green answered and can move the call. Amber is quiet. Red is stuck.</p>"
         f"{_roster_rows(latest)}{score_html}{trail}"
         "</section>"
     )
@@ -510,7 +517,7 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     return (
         "<section class='learn' id='learning'><div class='roster-head'><span>Learning</span></div>"
         "<p class='deck'>Each line is the points added to the next call after every scored miss. "
-        "The centre line is zero. Above it, the agent has been too low.</p>"
+        "The centre line is zero. Above it, the agent has been too low. Shared for the next hour.</p>"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
 
