@@ -178,7 +178,14 @@ def test_score_updates_weight_and_chart_colors():
     assert "Scored an open call." in page
     assert "Needs a look" not in page
     assert "Watching. Every agent is working." in page
+    assert "The call was -35." in page
+    assert "Crude added -60: Oil jumps." in page
+    assert "World added +20: Asia higher." in page
+    assert "Rupee, Policy and Flows were quiet." in page
+    assert "Options found the market shut." in page
+    assert "Weights had no answer." in page
     assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · mean +8" in page
+    assert "The call was +8." in page
 
 
 def test_called_level_sits_beside_the_live_nifty():

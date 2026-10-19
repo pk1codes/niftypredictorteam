@@ -31,7 +31,7 @@ def render_page(
     gift_price = None if gift is None else gift.get("price")
     current = _current_chart(ensemble, nifty, gift_price, history, last_run)
     errors = _error_chart(residuals)
-    log = _activity(events)
+    log = _activity(events, feeds)
     learning = _learning(claims or [], history or [])
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
     early = ""
@@ -116,7 +116,8 @@ def render_page(
   .name {{ width: 84px; flex: none; font: 600 13px/1.3 ui-sans-serif, sans-serif; color: #3f3a34; }}
   .line {{ flex: 1; min-width: 0; }}
   .trail, .score {{ margin: 0; padding: 8px 14px; border-top: 1px solid #f0ebe3; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
-  .score {{ color: #1c1915; background: #f7f3fb; }}
+  .score, .how {{ color: #1c1915; background: #f7f3fb; }}
+  .how {{ font: 15px/1.45 ui-sans-serif, sans-serif; }}
   .impact {{ flex: none; min-width: 52px; text-align: right; font: 600 16px/1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
   .matter .impact, .agent .impact, .off .impact {{ padding: 2px 8px; border-radius: 999px; background: #f4f1ea; }}
   .plus {{ color: #0c7a3a; }}
@@ -462,7 +463,7 @@ def _matter_rows(rows: list[tuple[str, str, str, float]]) -> str:
     return "\n".join(html)
 
 
-def _activity(events: list[Event]) -> str:
+def _activity(events: list[Event], feeds: list[dict] | None = None) -> str:
     grouped: dict[str, list[Event]] = {}
     order: list[str] = []
     for event in events:
@@ -475,14 +476,15 @@ def _activity(events: list[Event]) -> str:
     latest = grouped[order[0]]
     score = next((event for event in latest if event.agent == SCORE_AGENT), None)
     score_html = f"<p class='score'>{escape(score.sentence)}</p>" if score else ""
-    trail = "\n".join(_trail_line(stamp, grouped[stamp]) for stamp in order[1:7])
+    trail = "\n".join(_trail_line(stamp, grouped[stamp]) for stamp in order[1:9])
     checked = _checked(latest)
     tone = "count" if checked == 8 else "count short"
+    story = _call_story(latest, feeds)
     return (
         "<section class='roster'>"
         f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
-        "<p class='deck'>Green answered and can move the call. Amber is quiet. Red is stuck.</p>"
-        f"{_roster_rows(latest)}{score_html}{trail}"
+        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how the call was made.</p>"
+        f"{_roster_rows(latest)}{score_html}<p class='how'>{escape(story)}</p>{trail}"
         "</section>"
     )
 
@@ -605,7 +607,83 @@ def _trail_line(stamp: str, events: list[Event]) -> str:
     mean = "—"
     if board is not None and board.sentence not in STATUS_LINES:
         mean = impact_text(board.impact)
-    return f"<p class='trail'>{escape(when)} · {_checked(events)} of 8 · mean {escape(mean)}</p>"
+    summary = f"{when} · {_checked(events)} of 8 · mean {mean}"
+    return f"<p class='trail'>{escape(summary)}. {escape(_call_story(events))}</p>"
+
+
+def _call_story(events: list[Event], feeds: list[dict] | None = None) -> str:
+    found = _by_agent(events)
+    moved = []
+    quiet = []
+    shut = []
+    stuck = []
+    for key, name in ROSTER:
+        event = found.get(key)
+        if event is None:
+            continue
+        sentence = event.sentence
+        if sentence in MISSED_LINES or sentence == "No check":
+            stuck.append(name)
+        elif sentence == "Market shut":
+            shut.append(name)
+        elif sentence in STATUS_LINES:
+            quiet.append(name)
+        elif event.impact:
+            moved.append(f"{name} added {impact_text(event.impact)}: {sentence.rstrip('.')}.")
+        else:
+            moved.append(f"{name} reported: {sentence.rstrip('.')}.")
+    board = found.get(BOARD_AGENT)
+    if board is not None and board.sentence not in STATUS_LINES:
+        parts = [f"The call was {impact_text(board.impact)}."]
+    else:
+        parts = ["No call this hour."]
+    parts.extend(moved)
+    if quiet:
+        parts.append(f"{_name_list(quiet)} was quiet." if len(quiet) == 1 else f"{_name_list(quiet)} were quiet.")
+    if shut:
+        parts.append(f"{_name_list(shut)} found the market shut.")
+    if stuck:
+        parts.append(f"{_name_list(stuck)} had no answer.")
+    score = found.get(SCORE_AGENT)
+    if score is not None:
+        text = score.sentence.rstrip(".")
+        parts.append(f"{text}.")
+    boss = found.get(BOSS_AGENT)
+    if boss is not None and not boss.sentence.startswith("Watching"):
+        text = boss.sentence.rstrip(".")
+        parts.append(f"{text}.")
+    news = _feed_story(feeds)
+    if news:
+        parts.append(news)
+    return " ".join(parts)
+
+
+def _feed_story(feeds: list[dict] | None) -> str:
+    if not feeds:
+        return ""
+    bits = []
+    for row in feeds:
+        label = str(row.get("label") or "").strip()
+        if not label:
+            continue
+        lines = [str(line) for line in row.get("lines") or [] if str(line)]
+        if lines:
+            used = sum("In the call" in line or line.startswith("Kept,") or "Kept," in line for line in lines)
+            aside = sum("not an event" in line or "cannot" in line or "heavyweights" in line or "cinema" in line or "lifestyle" in line for line in lines)
+            bits.append(f"{label} read {len(lines)} stories. {used} kept. {aside} set aside.")
+        else:
+            detail = str(row.get("detail") or "").strip().rstrip(".")
+            if detail:
+                bits.append(f"{label}: {detail}.")
+    return " ".join(bits)
+
+
+def _name_list(names: list[str]) -> str:
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _checked(events: list[Event]) -> int:
