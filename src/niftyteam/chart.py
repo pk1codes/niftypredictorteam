@@ -104,8 +104,18 @@ def render_page(
   .ahead h2 .impact {{ letter-spacing: 0; }}
   .ahead .name {{ width: 120px; }}
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
+  .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 8px; }}
+  .compare .from, .compare .off {{ margin: 0 0 8px; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
+  .compare .off {{ margin: 4px 0 8px; }}
+  .compare .pair {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+  .compare .pair span {{ display: block; color: #746c62; font: 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; }}
+  .compare .pair strong {{ display: block; margin-top: 2px; font: 600 28px/1.15 ui-sans-serif, sans-serif; }}
+  .compare .pair em {{ font-style: normal; }}
   .spark {{ width: 72px; height: 16px; flex: none; }}
-  @media (max-width: 720px) {{ .top {{ grid-template-columns: 1fr; }} }}
+  @media (max-width: 720px) {{
+    .top {{ grid-template-columns: 1fr; }}
+    .compare .pair strong {{ font-size: 22px; }}
+  }}
 </style>
 </head>
 <body>
@@ -123,6 +133,7 @@ def render_page(
     </div>
     <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   </div>
+  {_compare_html(ensemble, nifty)}
   {_ahead_html(ahead)}
   {_matters(events)}
   <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
@@ -195,6 +206,79 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
             shown = f"{number:+,}{suffix}"
         kind = impact_class(0 if tint is None else tint)
     return f"<div><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
+
+
+def _compare_html(ensemble: Ensemble | None, nifty: float | None) -> str:
+    if ensemble is None or ensemble.nifty_level is None:
+        return ""
+    anchor = ensemble.nifty_level
+    predicted = anchor + ensemble.mu
+    actual = None if nifty is None else nifty - anchor
+    off = ""
+    if nifty is not None:
+        gap = nifty - predicted
+        off = f"<p class='off'>Off by <span class='impact {impact_class(gap)}'>{impact_text(gap)}</span></p>"
+    now_level = "—" if nifty is None else _level_text(nifty)
+    now_change = "—" if actual is None else impact_text(actual)
+    now_class = "flat" if actual is None else impact_class(actual)
+    return (
+        "<section class='compare' aria-label='Called against Nifty'>"
+        f"<p class='from'>Called from {_level_text(anchor)}</p>"
+        "<div class='pair'>"
+        "<div><span>Predicted now</span>"
+        f"<strong>{_level_text(predicted)}</strong>"
+        f"<em class='impact {impact_class(ensemble.mu)}'>{impact_text(ensemble.mu)}</em></div>"
+        "<div><span>Nifty 50 now</span>"
+        f"<strong>{now_level}</strong>"
+        f"<em class='impact {now_class}'>{now_change}</em></div>"
+        "</div>"
+        f"{_compare_bar(anchor, predicted, nifty)}"
+        f"{off}"
+        "</section>"
+    )
+
+
+def _compare_bar(anchor: float, predicted: float, nifty: float | None) -> str:
+    marks = [("From", anchor, "#746c62"), ("Called", predicted, "#1d4e89")]
+    if nifty is not None:
+        marks.append(("Now", nifty, "#0c7a3a"))
+    values = [value for _name, value, _color in marks]
+    lo, hi = min(values), max(values)
+    cushion = max((hi - lo) * 0.12, 20)
+    lo -= cushion
+    hi += cushion
+    width, pad, baseline = 400, 28, 36
+    span = hi - lo or 1
+
+    def sx(value: float) -> float:
+        return pad + (value - lo) / span * (width - 2 * pad)
+
+    placed = []
+    dots = []
+    labels = []
+    label_row = 0
+    for name, value, color in marks:
+        x = sx(value)
+        lift = 0
+        while any(abs(x - other) < 10 and lift == height for other, height in placed):
+            lift += 8
+        placed.append((x, lift))
+        row = 1 if any(abs(x - other) < 52 for other, _height in placed[:-1]) else 0
+        label_row = max(label_row, row)
+        dots.append(
+            f"<line x1='{x:.1f}' y1='{baseline - 14 - lift}' x2='{x:.1f}' y2='{baseline}' stroke='{color}' stroke-width='2'/>"
+            f"<circle cx='{x:.1f}' cy='{baseline - 14 - lift}' r='4' fill='{color}'/>"
+        )
+        labels.append(
+            f"<text x='{x:.1f}' y='{baseline + 16 + row * 14}' text-anchor='middle' font-size='11' fill='{color}'>{escape(name)}</text>"
+        )
+    height = 78 + label_row * 14
+    return (
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Called against Nifty' "
+        "style='font-family:ui-sans-serif,sans-serif'>"
+        f"<line x1='{pad}' y1='{baseline}' x2='{width - pad}' y2='{baseline}' stroke='#e4ddd2'/>"
+        f"{''.join(dots)}{''.join(labels)}</svg>"
+    )
 
 
 def _ahead_html(ahead: dict | None) -> str:
