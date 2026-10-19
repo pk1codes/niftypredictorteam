@@ -121,9 +121,12 @@ def render_page(
   .matter .plus, .agent .plus, .off .plus {{ background: #e7f5ec; }}
   .matter .minus, .agent .minus, .off .minus {{ background: #fdeceb; }}
   .empty {{ margin: 0; padding: 16px; color: #746c62; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
-  .learn .agent .line {{ color: #746c62; }}
-  .learn .agent .line.up {{ color: #0c7a3a; font-weight: 650; }}
-  .learn .agent .line.down {{ color: #c62828; font-weight: 650; }}
+  .learn-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 14px 8px; }}
+  .learn-card {{ display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 8px; border: 1px solid #efeae2; border-radius: 10px; padding: 8px 10px 6px; }}
+  .learn-plot {{ grid-column: 1 / -1; width: 100%; height: auto; }}
+  .learn .line.up {{ color: #0c7a3a; font-weight: 650; }}
+  .learn .line.down {{ color: #c62828; font-weight: 650; }}
+  .learn .wait {{ padding: 2px 14px 14px; margin: 0; }}
   .ahead, .compare {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0; padding: 12px 14px 10px; box-shadow: inset 0 3px 0 #1d4e89; }}
   .ahead .name {{ width: auto; flex: 1; }}
   .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
@@ -137,7 +140,7 @@ def render_page(
   .compare .pair span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
   .compare .pair strong {{ display: block; margin-top: 4px; font: 600 28px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
   .compare .pair em {{ font-style: normal; }}
-  .spark {{ width: 72px; height: 16px; flex: none; color: #6b3fa0; }}
+  .learn {{ margin-top: 16px; }}
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
@@ -150,7 +153,7 @@ def render_page(
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .compare .pair, .stats, .feed-row {{ grid-template-columns: 1fr; }}
+    .split, .matters, .desk, .compare .pair, .stats, .feed-row, .learn-grid {{ grid-template-columns: 1fr; }}
     .compare .pair strong {{ font-size: 22px; }}
   }}
 </style>
@@ -174,10 +177,8 @@ def render_page(
   {split}
   {_matters(events)}
   <figure class="errors">{errors}<figcaption>How far the real move landed from the call. The dashed line is the average miss. The curve appears once scores exist.</figcaption></figure>
-  <div class="desk">
-    {log}
-    {learning}
-  </div>
+  {log}
+  {learning}
 </main>
 <script>
 const lastRaw = document.getElementById("status").dataset.last;
@@ -468,43 +469,77 @@ def _activity(events: list[Event]) -> str:
     )
 
 
+_LEARN_COLOR = {
+    "Board": "#4a453e",
+    "World": "#1d4e89",
+    "Crude": "#b86e00",
+    "Rupee": "#0f6e6e",
+    "Policy": "#6b3fa0",
+    "Flows": "#3d6b4f",
+    "Weights": "#8a4b2f",
+    "Options": "#5c6b7a",
+    "Scout": "#3a6ea5",
+}
+
+
 def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     series = agent_misses(claims, ensembles)
-    names = list(ROSTER) + [(BOARD_AGENT, "Board")]
-    rows = "\n".join(_learn_row(name, series.get(key) or []) for key, name in names)
+    names = [(BOARD_AGENT, "Board")] + list(ROSTER)
+    cards = []
+    waiting = []
+    for key, name in names:
+        row = _learn_row(name, series.get(key) or [])
+        if row:
+            cards.append(row)
+        else:
+            waiting.append(name)
+    wait = ""
+    if waiting:
+        wait = f"<p class='deck wait'>Not enough scores for {escape(', '.join(waiting))}.</p>"
     return (
-        "<section class='learn'><div class='roster-head'><span>Learning</span></div>"
-        "<p class='deck'>How far each agent’s usual miss has shifted.</p>"
-        f"{rows}</section>"
+        "<section class='learn' id='learning'><div class='roster-head'><span>Learning</span></div>"
+        "<p class='deck'>Each line is the points added to the next call after every scored miss. "
+        "The centre line is zero. Above it, the agent has been too low.</p>"
+        f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
 
 
 def _learn_row(name: str, misses: list[float]) -> str:
-    trail = shift_trail(misses)
+    trail = shift_trail(misses, keep=48)
     if not trail:
-        return (
-            f"<div class='agent'><span class='name'>{escape(name)}</span>"
-            f"<span class='line'>Not enough scores</span></div>"
-        )
+        return ""
     shift = trail[-1]
     kind = "up" if shift > 0.5 else "down" if shift < -0.5 else ""
+    color = _LEARN_COLOR.get(name, "#4a453e")
     return (
-        f"<div class='agent'><span class='name'>{escape(name)}</span>"
-        f"{_spark(trail)}<span class='line {kind}'>{impact_text(shift)}</span></div>"
+        f"<div class='learn-card'><span class='name'>{escape(name)}</span>"
+        f"<span class='line {kind}'>{impact_text(shift)}</span>"
+        f"{_learn_plot(trail, color)}</div>"
     )
 
 
-def _spark(scores: list[float]) -> str:
-    width, height = 72, 16
-    pts = []
-    last = max(len(scores) - 1, 1)
-    for index, score in enumerate(scores):
-        x = 2 + (width - 4) * index / last
-        y = 2 + (height - 4) * (1 - (score + 30) / 60)
-        pts.append(f"{x:.1f},{y:.1f}")
+def _learn_plot(scores: list[float], color: str) -> str:
+    width, height = 240, 72
+    pad_x, pad_y = 10, 10
+    lo, hi = -30.0, 30.0
+
+    def sx(index: int) -> float:
+        last = max(len(scores) - 1, 1)
+        return pad_x + (width - 2 * pad_x) * index / last
+
+    def sy(value: float) -> float:
+        return pad_y + (1 - (value - lo) / (hi - lo)) * (height - 2 * pad_y)
+
+    zero = sy(0)
+    pts = [f"{sx(index):.1f},{sy(value):.1f}" for index, value in enumerate(scores)]
+    end_x, end_y = sx(len(scores) - 1), sy(scores[-1])
+    area = f"{sx(0):.1f},{zero:.1f} " + " ".join(pts) + f" {end_x:.1f},{zero:.1f}"
     return (
-        f"<svg class='spark' viewBox='0 0 {width} {height}' aria-hidden='true'>"
-        f"<polyline fill='none' stroke='currentColor' stroke-width='1.5' points='{' '.join(pts)}'/>"
+        f"<svg class='learn-plot' viewBox='0 0 {width} {height}' aria-hidden='true'>"
+        f"<line x1='{pad_x}' y1='{zero:.1f}' x2='{width - pad_x}' y2='{zero:.1f}' stroke='#e4ddd2'/>"
+        f"<polygon points='{area}' fill='{color}' fill-opacity='0.14'/>"
+        f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{' '.join(pts)}'/>"
+        f"<circle cx='{end_x:.1f}' cy='{end_y:.1f}' r='3.5' fill='{color}'/>"
         f"</svg>"
     )
 
