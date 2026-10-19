@@ -2,8 +2,8 @@ name: tick
 
 on:
   schedule:
-    # 16:56–23:56 UTC is the measured low-drop band. :56 is the least-used minute.
-    - cron: "56 16-23 * * *"
+    # Every hour at :56 UTC (:26 IST). A failed hour does not stop the next one.
+    - cron: "56 * * * *"
   workflow_dispatch:
 
 permissions:
