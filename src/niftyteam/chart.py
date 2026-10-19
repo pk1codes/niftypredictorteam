@@ -231,7 +231,7 @@ def _matters(events: list[Event]) -> str:
 
 
 def _mover_total(rows: list[tuple[str, str, str, float]]) -> str:
-    shown = [impact for _name, sentence, kind, impact in rows if _shows_impact(kind, sentence)]
+    shown = [int(round(impact)) for _name, sentence, kind, impact in rows if _shows_impact(kind, sentence)]
     if not shown:
         return ""
     total = sum(shown)

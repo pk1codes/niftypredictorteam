@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, watch_line
-from niftyteam.chart import render_page
+from niftyteam.chart import _mover_total, render_page
 from niftyteam.config import impact_class
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
 from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
@@ -179,6 +179,16 @@ def test_score_updates_weight_and_chart_colors():
     assert "Needs a look" not in page
     assert "Watching. Every agent is working." in page
     assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · mean +8" in page
+
+
+def test_mover_total_sums_the_shown_numbers():
+    rows = [
+        ("World", "Gold", "ok", -47.6),
+        ("Crude", "Oil", "ok", 40.4),
+        ("Rupee", "USD", "ok", 5.4),
+        ("Policy", "Quiet", "idle", 9.6),
+    ]
+    assert _mover_total(rows) == "<span class='impact minus'>-3</span>"
 
 
 def test_hard_day_families():
