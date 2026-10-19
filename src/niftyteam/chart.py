@@ -39,7 +39,7 @@ def render_page(
     status = _status(last_run)
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True)
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr")
-    called = _compare_html(ensemble, nifty)
+    called = _compare_html(ensemble, history or [])
     outlook = _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
     return f"""<!DOCTYPE html>
@@ -131,15 +131,14 @@ def render_page(
   .ahead .name {{ width: auto; flex: 1; }}
   .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
-  .compare .from, .compare .off {{ margin: 0 0 8px; color: #5e584f; font: 13px/1.35 ui-sans-serif, sans-serif; }}
-  .compare .off {{ margin: 10px 0 2px; font-size: 15px; color: #1c1915; }}
-  .compare .pair {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+  .compare .pair {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }}
   .compare .pair > div {{ border-radius: 10px; padding: 10px 12px; }}
+  .compare .was {{ background: #f7f5f1; }}
   .compare .called {{ background: #f4f7fb; }}
-  .compare .live {{ background: #f3faf6; }}
+  .compare .arrived {{ background: #f3faf6; }}
+  .compare .will {{ background: #f7f3fb; }}
   .compare .pair span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
-  .compare .pair strong {{ display: block; margin-top: 4px; font: 600 28px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
-  .compare .pair em {{ font-style: normal; }}
+  .compare .pair strong {{ display: block; margin-top: 4px; font: 600 22px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
   .learn {{ margin-top: 16px; }}
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
@@ -153,8 +152,8 @@ def render_page(
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .compare .pair, .stats, .feed-row, .learn-grid {{ grid-template-columns: 1fr; }}
-    .compare .pair strong {{ font-size: 22px; }}
+    .split, .matters, .desk, .stats, .feed-row, .learn-grid {{ grid-template-columns: 1fr; }}
+    .compare .pair {{ grid-template-columns: 1fr 1fr; }}
   }}
 </style>
 </head>
@@ -269,41 +268,60 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
     return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
 
 
-def _compare_html(ensemble: Ensemble | None, nifty: float | None) -> str:
-    if ensemble is None or ensemble.nifty_level is None:
+def _compare_html(ensemble: Ensemble | None, history: list[Ensemble]) -> str:
+    finished, forward = _settled_calls(ensemble, history)
+    if finished is None and forward is None:
         return ""
-    anchor = ensemble.nifty_level
-    predicted = anchor + ensemble.mu
-    actual = None if nifty is None else nifty - anchor
-    off = ""
-    if nifty is not None:
-        gap = nifty - predicted
-        off = f"<p class='off'>Off by <span class='impact {impact_class(gap)}'>{impact_text(gap)}</span></p>"
-    now_level = "—" if nifty is None else _level_text(nifty)
-    now_change = "—" if actual is None else impact_text(actual)
-    now_class = "flat" if actual is None else impact_class(actual)
+    was = None if finished is None or finished.nifty_level is None else finished.nifty_level
+    called = None if was is None else was + finished.mu
+    arrived = None if was is None or finished.actual is None else was + finished.actual
+    coming = None if forward is None or forward.nifty_level is None else forward.nifty_level + forward.mu
+    marks = []
+    if was is not None:
+        marks.append(("Was", was, "#746c62"))
+    if called is not None:
+        marks.append(("Called", called, "#1d4e89"))
+    if arrived is not None:
+        marks.append(("Is", arrived, "#0c7a3a"))
+    if coming is not None:
+        marks.append(("Will", coming, "#6b3fa0"))
     return (
         "<section class='compare' aria-label='Called against Nifty'>"
-        f"<p class='from'>Called from {_level_text(anchor)}</p>"
-        "<p class='deck'>Blue is the call. Green is the live index.</p>"
+        "<p class='deck'>The last call that has a close, then the one still open.</p>"
         "<div class='pair'>"
-        "<div class='called'><span>Predicted now</span>"
-        f"<strong>{_level_text(predicted)}</strong>"
-        f"<em class='impact {impact_class(ensemble.mu)}'>{impact_text(ensemble.mu)}</em></div>"
-        "<div class='live'><span>Nifty 50 now</span>"
-        f"<strong>{now_level}</strong>"
-        f"<em class='impact {now_class}'>{now_change}</em></div>"
+        f"{_level_card('was', 'Nifty was', was)}"
+        f"{_level_card('called', 'Prediction was', called)}"
+        f"{_level_card('arrived', 'Nifty is', arrived)}"
+        f"{_level_card('will', 'Nifty will be', coming)}"
         "</div>"
-        f"{off}"
-        f"{_compare_bar(anchor, predicted, nifty)}"
+        f"{_compare_bar(marks)}"
         "</section>"
     )
 
 
-def _compare_bar(anchor: float, predicted: float, nifty: float | None) -> str:
-    marks = [("From", anchor, "#746c62"), ("Called", predicted, "#1d4e89")]
-    if nifty is not None:
-        marks.append(("Now", nifty, "#0c7a3a"))
+def _settled_calls(ensemble: Ensemble | None, history: list[Ensemble]) -> tuple[Ensemble | None, Ensemble | None]:
+    rows = [row for row in history if row.horizon == "session" and row.nifty_level is not None]
+    if ensemble is not None and ensemble.horizon == "session" and ensemble.nifty_level is not None:
+        if all(row.id != ensemble.id for row in rows):
+            rows.append(ensemble)
+    rows.sort(key=lambda row: row.ts)
+    finished_rows = [row for row in rows if row.actual is not None]
+    waiting_rows = [row for row in rows if row.actual is None]
+    finished = finished_rows[-1] if finished_rows else None
+    forward = waiting_rows[-1] if waiting_rows else None
+    if finished is not None and forward is not None and forward.ts < finished.ts:
+        forward = None
+    return finished, forward
+
+
+def _level_card(kind: str, label: str, level: float | None) -> str:
+    shown = "—" if level is None else _level_text(level)
+    return f"<div class='{kind}'><span>{escape(label)}</span><strong>{shown}</strong></div>"
+
+
+def _compare_bar(marks: list[tuple[str, float, str]]) -> str:
+    if len(marks) < 2:
+        return ""
     values = [value for _name, value, _color in marks]
     lo, hi = min(values), max(values)
     cushion = max((hi - lo) * 0.12, 20)

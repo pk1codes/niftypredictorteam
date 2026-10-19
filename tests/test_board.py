@@ -182,26 +182,31 @@ def test_score_updates_weight_and_chart_colors():
 
 
 def test_called_level_sits_beside_the_live_nifty():
-    call = Ensemble(id="e", ts="2026-10-19T10:00:00+05:30", mu=40, sigma=20, n_shocks=2, nifty_level=24800)
-    page = render_page(call, [], [], 24810, 0)
+    done = Ensemble(
+        id="old", ts="2026-10-16T10:00:00+05:30", mu=40, sigma=20, n_shocks=2, nifty_level=24800, actual=10,
+    )
+    call = Ensemble(id="e", ts="2026-10-19T10:00:00+05:30", mu=15, sigma=20, n_shocks=1, nifty_level=24900)
+    page = render_page(call, [], [], 24910, 0, history=[done, call])
     card = page.split("aria-label='Called against Nifty'", 1)[1].split("</section>", 1)[0]
-    assert "Called from 24,800" in card
-    assert "Predicted now" in card
+    assert "Nifty was" in card
+    assert "24,800" in card
+    assert "Prediction was" in card
     assert "24,840" in card
-    assert "class='impact plus'>+40" in card
-    assert "Nifty 50 now" in card
+    assert "Nifty is" in card
     assert "24,810" in card
-    assert "class='impact plus'>+10" in card
-    assert "Off by <span class='impact minus'>-30</span>" in card
-    assert ">From<" in card
+    assert "Nifty will be" in card
+    assert "24,915" in card
+    assert ">Was<" in card
     assert ">Called<" in card
-    assert ">Now<" in card
+    assert ">Is<" in card
+    assert ">Will<" in card
+    assert "24,910" not in card
     pending = render_page(call, [], [], None, 0)
-    assert "Nifty 50 now" in pending
-    assert "<strong>—</strong>" in pending
-    assert "Off by" not in pending
+    assert "Nifty will be" in pending
+    assert "24,915" in pending
+    assert pending.count("<strong>—</strong>") == 3
     blank = render_page(None, [], [], 24810, 0)
-    assert "Called from" not in blank
+    assert "Nifty was" not in blank
 
 
 def test_mover_total_sums_the_shown_numbers():
