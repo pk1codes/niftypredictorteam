@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlparse
@@ -15,7 +17,11 @@ UA = "niftyteam/0.1 (local research; +https://localhost)"
 def fetch_feed(client: httpx.Client, url: str) -> list[dict]:
     response = client.get(url, timeout=12, follow_redirects=True)
     response.raise_for_status()
-    parsed = feedparser.parse(response.content)
+    return feed_items(response.content)
+
+
+def feed_items(raw: bytes) -> list[dict]:
+    parsed = feedparser.parse(raw)
     items = []
     for entry in parsed.entries:
         link = entry.get("link") or ""
@@ -30,6 +36,25 @@ def fetch_feed(client: httpx.Client, url: str) -> list[dict]:
                 "summary": entry.get("summary") or "",
             }
         )
+    if items:
+        return items
+    return _listing(raw)
+
+
+def _listing(raw: bytes) -> list[dict]:
+    text = raw.decode("utf-8", "replace")
+    items = []
+    for blob in re.findall(r'<script type="application/ld\+json">(.*?)</script>', text, re.S | re.I):
+        try:
+            data = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        for row in data.get("itemListElement") or []:
+            title = str(row.get("name") or "").strip()
+            link = str(row.get("url") or "").strip()
+            if not title or not link:
+                continue
+            items.append({"title": title, "url": link, "published": None, "summary": ""})
     return items
 
 

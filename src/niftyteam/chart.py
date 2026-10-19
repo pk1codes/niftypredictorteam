@@ -25,6 +25,7 @@ def render_page(
     open_call: Ensemble | None = None,
     claims: list[Claim] | None = None,
     ahead: dict | None = None,
+    feeds: list[dict] | None = None,
 ) -> str:
     gift_price = None if gift is None else gift.get("price")
     current = _current_chart(ensemble, nifty, gift_price, history, last_run)
@@ -137,10 +138,19 @@ def render_page(
   .compare .pair strong {{ display: block; margin-top: 4px; font: 600 28px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
   .compare .pair em {{ font-style: normal; }}
   .spark {{ width: 72px; height: 16px; flex: none; color: #6b3fa0; }}
+  .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
+  .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
+  .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+  .feed {{ display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; }}
+  .feed.ok {{ background: #f3faf6; }}
+  .feed.bad {{ background: #fdf4f3; }}
+  .feed.idle {{ background: #fbf6ee; }}
+  .feed .name {{ width: auto; }}
+  .feed .line {{ color: #3f3a34; font: 14px/1.35 ui-sans-serif, sans-serif; }}
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .compare .pair, .stats {{ grid-template-columns: 1fr; }}
+    .split, .matters, .desk, .compare .pair, .stats, .feed-row {{ grid-template-columns: 1fr; }}
     .compare .pair strong {{ font-size: 22px; }}
   }}
 </style>
@@ -159,6 +169,7 @@ def render_page(
     {fii_tile}
   </div>
   {early}
+  {_feeds_html(feeds)}
   <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   {split}
   {_matters(events)}
@@ -193,6 +204,27 @@ setInterval(paint, 1000);
 </body>
 </html>
 """
+
+
+def _feeds_html(feeds: list[dict] | None) -> str:
+    if not feeds:
+        return ""
+    cards = []
+    for row in feeds:
+        state = str(row.get("state") or "wait")
+        kind = "ok" if state == "read" else "bad" if state in {"miss", "down"} else "idle"
+        label = str(row.get("label") or "")
+        detail = str(row.get("detail") or "")
+        cards.append(
+            f"<div class='feed {kind}'><span class='dot {kind}'></span>"
+            f"<span class='name'>{escape(label)}</span>"
+            f"<span class='line'>{escape(detail)}</span></div>"
+        )
+    return (
+        "<section class='feeds' aria-label='Important feeds'>"
+        "<h2>Important feeds</h2>"
+        f"<div class='feed-row'>{''.join(cards)}</div></section>"
+    )
 
 
 def _status(last_run: str | None) -> str:

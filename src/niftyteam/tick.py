@@ -270,6 +270,49 @@ def _roster_lines(store, feed_lines, pcr_claims, chain_state, fii_claims, fii_wo
     return lines
 
 
+def important_view(store: Store) -> list[dict]:
+    raw = store.meta("important_feeds") or ""
+    if not raw:
+        return []
+    try:
+        rows = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [row for row in rows if isinstance(row, dict) and row.get("label")]
+
+
+def _feed_row(source_id: str, label: str, state: str, detail: str) -> dict:
+    return {"id": source_id, "label": label, "state": state, "detail": detail}
+
+
+def _feed_detail(stories: int, headline: str) -> str:
+    if headline:
+        return f"Checked · {clip(headline, 64)}"
+    if stories == 1:
+        return "Checked · 1 story"
+    if stories:
+        return f"Checked · {stories} stories"
+    return "Checked · nothing new"
+
+
+def _save_feed_notes(store: Store, config: dict, notes: dict, reset: bool) -> None:
+    prior: dict[str, dict] = {}
+    if not reset:
+        for row in important_view(store):
+            if row.get("id"):
+                prior[str(row["id"])] = row
+    prior.update(notes)
+    ordered = []
+    for row in config.get("sources") or []:
+        if not row.get("important"):
+            continue
+        found = prior.get(row["id"])
+        if found is None:
+            found = _feed_row(row["id"], row.get("label") or row["id"], "wait", "Not checked")
+        ordered.append(found)
+    store.set_meta("important_feeds", json.dumps(ordered))
+
+
 def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool = False, only: set[str] | None = None) -> tuple[list[Claim], set[str], dict[str, tuple[str, float]]]:
     hour = stamp.hour
     quiet = hour in set(config.get("quiet_hours") or [])
@@ -287,9 +330,17 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
     if only is not None:
         sources = [row for row in sources if row.beat in only]
     live = [row for row in sources if row.status != "down"]
+    watch = {
+        row["id"]: row.get("label") or row["id"]
+        for row in config.get("sources") or []
+        if row.get("important")
+    }
+    notes: dict[str, dict] = {}
     for source in sources:
         if source.status == "down":
             down.add(source.beat)
+            if source.id in watch:
+                notes[source.id] = _feed_row(source.id, watch[source.id], "down", "Down")
     with httpx.Client(headers={"User-Agent": "Mozilla/5.0 niftyteam/0.1"}, follow_redirects=True) as client:
         for source in live:
             try:
@@ -305,7 +356,11 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                 _fail(store, source, stamp)
                 if source.status == "down":
                     down.add(source.beat)
+                if source.id in watch:
+                    notes[source.id] = _feed_row(source.id, watch[source.id], "miss", "No answer")
                 continue
+            used = ""
+            used_abs = -1.0
             for item in items:
                 _note_links(store, config, item["summary"], source.beat)
                 if quiet and item["published"] and item["published"] < stamp - timedelta(hours=2):
@@ -323,6 +378,12 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                     prior = best.get(guess["beat"])
                     if prior is None or abs(claim.midpoint) > abs(prior.midpoint):
                         best[guess["beat"]] = claim
+                    if source.id in watch and abs(claim.midpoint) > used_abs:
+                        used = claim.headline
+                        used_abs = abs(claim.midpoint)
+            if source.id in watch:
+                notes[source.id] = _feed_row(source.id, watch[source.id], "read", _feed_detail(len(items), used))
+    _save_feed_notes(store, config, notes, reset=only is None)
     lines: dict[str, tuple[str, float]] = {}
     for key, _name in ROSTER:
         if key in {"pcr", "scout"}:
@@ -903,6 +964,7 @@ def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict |
         open_call,
         store.scored_claims(),
         ahead_view(store),
+        important_view(store),
     )
     path = root / "data" / "chart.html"
     path.parent.mkdir(parents=True, exist_ok=True)

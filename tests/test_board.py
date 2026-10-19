@@ -5,7 +5,7 @@ import pytest
 
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, watch_line
 from niftyteam.chart import _mover_total, render_page
-from niftyteam.config import impact_class
+from niftyteam.config import impact_class, load_config
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
 from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
 from niftyteam.learn import call_shift, learning_score, learning_trail
@@ -13,7 +13,7 @@ from niftyteam.horizons import forecast_move, next_open, session_close, sessions
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
-from niftyteam.search import parse_gift
+from niftyteam.search import feed_items, parse_gift
 from niftyteam.store import Store
 from niftyteam.tick import _fold_feed, _make_claim, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, miss_titles
 
@@ -652,6 +652,80 @@ def test_learning_row_shows_the_next_shift():
     assert "Not enough scores" in page
     row = page.split(">World<", 1)[1].split("</div>", 1)[0]
     assert "+2" in row
+
+
+def test_pulse_and_tijori_join_the_agent_feeds():
+    sources = {row["id"]: row for row in load_config()["sources"]}
+    assert sources["pulse"]["beat"] == "flows"
+    assert sources["pulse"]["important"] is True
+    assert sources["pulse"]["label"] == "Pulse"
+    assert sources["pulse"]["url"] == "https://pulse.zerodha.com/feed.php"
+    assert sources["tijori"]["beat"] == "weights"
+    assert sources["tijori"]["important"] is True
+    assert sources["tijori"]["label"] == "Tijori"
+    assert sources["tijori"]["url"] == "https://www.tijorialerts.com/company-updates/"
+    allow = set(load_config()["allowlist"])
+    assert "pulse.zerodha.com" in allow
+    assert "www.tijorialerts.com" in allow
+    assert "tijorialerts.com" in allow
+
+
+def test_important_feeds_show_that_they_were_checked():
+    page = render_page(
+        None,
+        [],
+        [],
+        None,
+        0,
+        feeds=[
+            {"label": "Pulse", "state": "read", "detail": "Checked · 8 stories"},
+            {"label": "Tijori", "state": "miss", "detail": "No answer"},
+        ],
+    )
+    assert "Important feeds" in page
+    assert "class='feed ok'" in page
+    assert "Pulse" in page
+    assert "Checked · 8 stories" in page
+    assert "class='feed bad'" in page
+    assert "Tijori" in page
+    assert "No answer" in page
+    assert "Important feeds" not in render_page(None, [], [], None, 0)
+
+
+def test_an_important_feed_starts_with_more_weight(tmp_path):
+    store = Store(tmp_path / "feeds.sqlite")
+    store.seed_sources([
+        {"id": "pulse", "beat": "flows", "kind": "rss", "url": "https://pulse.zerodha.com/feed.php", "important": True},
+        {"id": "et-markets", "beat": "flows", "kind": "rss", "url": "https://et.example/rss"},
+    ])
+    assert store.source("pulse").weight == 1
+    assert store.source("et-markets").weight == 0.4
+    store.close()
+
+
+def test_a_listing_page_is_read_as_a_feed():
+    page = """
+    <html><head>
+    <script type="application/ld+json">{"@type":"ItemList","itemListElement":[
+      {"name":"Reliance announces a buyback","url":"https://www.tijorialerts.com/company-updates/reliance/"},
+      {"name":"","url":"https://example.com/skip"}
+    ]}</script>
+    </head></html>
+    """
+    rows = feed_items(page.encode())
+    assert rows == [
+        {
+            "title": "Reliance announces a buyback",
+            "url": "https://www.tijorialerts.com/company-updates/reliance/",
+            "published": None,
+            "summary": "",
+        }
+    ]
+    rss = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+      <title>Oil jumps</title><link>https://pulse.zerodha.com/x</link>
+      </item></channel></rss>"""
+    assert feed_items(rss)[0]["title"] == "Oil jumps"
+    assert feed_items(rss)[0]["url"] == "https://pulse.zerodha.com/x"
 
 
 def test_fit_move_adds_the_usual_miss():

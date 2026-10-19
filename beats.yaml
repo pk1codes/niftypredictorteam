@@ -24,6 +24,9 @@ allowlist:
   - livemint.com
   - www.business-standard.com
   - business-standard.com
+  - pulse.zerodha.com
+  - www.tijorialerts.com
+  - tijorialerts.com
   - www.rbi.org.in
   - rbi.org.in
   - pib.gov.in
@@ -105,6 +108,12 @@ sources:
     beat: flows
     kind: rss
     url: "https://www.business-standard.com/rss/markets-106.rss"
+  - id: pulse
+    label: Pulse
+    important: true
+    beat: flows
+    kind: rss
+    url: "https://pulse.zerodha.com/feed.php"
   - id: fii-dii
     beat: flows
     kind: fii
@@ -117,6 +126,12 @@ sources:
     beat: weights
     kind: rss
     url: "https://www.moneycontrol.com/rss/results.xml"
+  - id: tijori
+    label: Tijori
+    important: true
+    beat: weights
+    kind: rss
+    url: "https://www.tijorialerts.com/company-updates/"
   - id: gdacs
     beat: global
     kind: rss

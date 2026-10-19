@@ -8,7 +8,7 @@ from niftyteam.chart import render_page
 from niftyteam.config import find_root, impact_text, load_dotenv
 from niftyteam.ensemble import book_std
 from niftyteam.store import Store
-from niftyteam.tick import tick
+from niftyteam.tick import important_view, tick
 
 
 def main() -> None:
@@ -57,6 +57,7 @@ def main() -> None:
                 opened,
                 store.scored_claims(),
                 ahead_view(store),
+                important_view(store),
             )
             path = root / "data" / "chart.html"
             path.write_text(html)

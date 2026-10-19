@@ -165,14 +165,20 @@ class Store:
             domain = ""
             if row["kind"] == "rss":
                 domain = _domain(row["url"])
+            weight = 1.0 if row.get("important") else 0.4
             self.conn.execute(
                 """
                 INSERT OR IGNORE INTO sources
                 (id, beat, kind, url, status, weight, domain)
-                VALUES (?, ?, ?, ?, 'active', 0.4, ?)
+                VALUES (?, ?, ?, ?, 'active', ?, ?)
                 """,
-                (row["id"], row["beat"], row["kind"], row["url"], domain),
+                (row["id"], row["beat"], row["kind"], row["url"], weight, domain),
             )
+            if row.get("important"):
+                self.conn.execute(
+                    "UPDATE sources SET weight = 1.0 WHERE id = ? AND n_scored = 0 AND weight < 1.0",
+                    (row["id"],),
+                )
         self.conn.commit()
 
     def sources(self, kinds: set[str] | None = None) -> list[Source]:
