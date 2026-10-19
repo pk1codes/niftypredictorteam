@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from niftyteam.ahead import ahead_view
 from niftyteam.chart import render_page
 from niftyteam.config import find_root, impact_text, load_dotenv
 from niftyteam.ensemble import book_std
@@ -55,6 +56,7 @@ def main() -> None:
                 rows,
                 opened,
                 store.scored_claims(),
+                ahead_view(store),
             )
             path = root / "data" / "chart.html"
             path.write_text(html)

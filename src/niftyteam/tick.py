@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import httpx
 
+from niftyteam.ahead import ahead_view, run_ahead
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, missed, wake, watch_line
 from niftyteam.chart import render_page
 from niftyteam.config import (
@@ -61,6 +62,8 @@ from niftyteam.models import Claim, Ensemble, Source
 from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
 from niftyteam.scout import query_for, scout_sentence, search_web
 from niftyteam.search import domain_of, fetch_feed, fetch_gift, fetch_level, fetch_price, fresh, hrefs
+
+AHEAD_FEEDS = {"brent": "BZ=F", "usdinr": "INR=X", "es": "ES=F"}
 from niftyteam.store import Store
 
 
@@ -169,6 +172,7 @@ def tick(root=None) -> int:
             boss,
         )
         _score(store, config, stamp, bars)
+        run_ahead(store, stamp, bars, _ahead_prices)
         _report_limits(
             store,
             stamp,
@@ -897,6 +901,7 @@ def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict |
         rows,
         open_call,
         store.scored_claims(),
+        ahead_view(store),
     )
     path = root / "data" / "chart.html"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -914,9 +919,26 @@ def _saved_notes(store: Store) -> list[str]:
     return [note for note in notes if isinstance(note, str)]
 
 
+def _ahead_prices() -> dict[str, float] | None:
+    found = {}
+    try:
+        with httpx.Client(timeout=12, headers={"User-Agent": "niftyteam/0.1"}) as client:
+            for name, symbol in AHEAD_FEEDS.items():
+                value = fetch_level(client, symbol)
+                if value is None:
+                    return None
+                found[name] = float(value)
+    except (httpx.HTTPError, KeyError, ValueError, TypeError, IndexError):
+        return None
+    return found
+
+
 def _print_board(store: Store) -> None:
     opened = store.latest_ensemble("open")
     latest = store.latest_ensemble("session")
+    view = ahead_view(store)
+    if view is not None:
+        print(f"Next close {view['move']:+.0f}  due {view['due']}")
     if opened:
         print(f"Open {opened.mu:+.0f}  spread {opened.sigma:.0f}")
     if latest:

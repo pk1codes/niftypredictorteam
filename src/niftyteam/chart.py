@@ -24,6 +24,7 @@ def render_page(
     history: list[Ensemble] | None = None,
     open_call: Ensemble | None = None,
     claims: list[Claim] | None = None,
+    ahead: dict | None = None,
 ) -> str:
     gift_price = None if gift is None else gift.get("price")
     current = _current_chart(ensemble, nifty, gift_price, history, last_run)
@@ -98,6 +99,11 @@ def render_page(
   .learn .agent .line {{ color: #746c62; }}
   .learn .up {{ color: #0c7a3a; }}
   .learn .down {{ color: #c62828; }}
+  .ahead {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 10px 14px 6px; }}
+  .ahead h2 {{ margin: 0 0 6px; display: flex; justify-content: space-between; align-items: baseline; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .ahead h2 .impact {{ letter-spacing: 0; }}
+  .ahead .name {{ width: 120px; }}
+  .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
   .spark {{ width: 72px; height: 16px; flex: none; }}
   @media (max-width: 720px) {{ .top {{ grid-template-columns: 1fr; }} }}
 </style>
@@ -117,6 +123,7 @@ def render_page(
     </div>
     <figure>{current}<figcaption>Curve is ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   </div>
+  {_ahead_html(ahead)}
   {_matters(events)}
   <figure>{errors}<figcaption>Actual minus mean, once scores exist.</figcaption></figure>
   {log}
@@ -188,6 +195,34 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
             shown = f"{number:+,}{suffix}"
         kind = impact_class(0 if tint is None else tint)
     return f"<div><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
+
+
+def _ahead_html(ahead: dict | None) -> str:
+    if not ahead:
+        return ""
+    move = float(ahead["move"])
+    raw = [(str(label), float(value)) for label, value in ahead.get("parts") or []]
+    shown = [int(round(value)) for _label, value in raw]
+    if shown:
+        shown[-1] += int(round(move)) - sum(shown)
+    total = sum(shown)
+    rows = []
+    for (label, _value), points in zip(raw, shown):
+        rows.append(
+            "<div class='matter'>"
+            f"<span class='name'>{escape(label)}</span>"
+            f"<span class='impact ahead-point {impact_class(points)}'>{impact_text(points)}</span>"
+            "</div>"
+        )
+    body = "\n".join(rows) or "<p class='due'>No drivers yet.</p>"
+    due = escape(str(ahead.get("due") or ""))
+    return (
+        "<section class='ahead'>"
+        f"<h2>Next close <span class='impact {impact_class(total)}' data-ahead='{total}'>{impact_text(total)}</span></h2>"
+        f"<p class='due'>Due {due}</p>"
+        f"{body}"
+        "</section>"
+    )
 
 
 def _matters(events: list[Event]) -> str:

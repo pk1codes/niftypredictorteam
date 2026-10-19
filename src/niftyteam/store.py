@@ -105,6 +105,29 @@ CREATE TABLE IF NOT EXISTS family_pairs (
     move REAL NOT NULL,
     clean INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS ahead_calls (
+    day TEXT PRIMARY KEY,
+    anchor REAL NOT NULL,
+    due_day TEXT NOT NULL,
+    predicted_move REAL NOT NULL,
+    baseline_move REAL NOT NULL DEFAULT 0,
+    model_move REAL NOT NULL,
+    train_n INTEGER NOT NULL DEFAULT 0,
+    actual_move REAL,
+    status TEXT NOT NULL,
+    parts TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS ahead_snapshots (
+    day TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value REAL NOT NULL,
+    PRIMARY KEY (day, name)
+);
+CREATE TABLE IF NOT EXISTS ahead_drivers (
+    name TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    contribution REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -456,6 +479,106 @@ class Store:
     def miss_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM misses").fetchone()
         return int(row["n"])
+
+    def ahead_call(self, day: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM ahead_calls WHERE day = ?", (day,)).fetchone()
+
+    def ahead_calls(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM ahead_calls ORDER BY day").fetchall()
+
+    def latest_ahead(self) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM ahead_calls WHERE status != 'discarded' ORDER BY day DESC LIMIT 1"
+        ).fetchone()
+
+    def add_ahead_call(
+        self,
+        day: str,
+        anchor: float,
+        due_day: str,
+        predicted_move: float,
+        model_move: float,
+        train_n: int,
+        parts: str,
+    ) -> bool:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO ahead_calls (
+                day, anchor, due_day, predicted_move, baseline_move, model_move, train_n, status, parts
+            ) VALUES (?, ?, ?, ?, 0, ?, ?, 'open', ?)
+            ON CONFLICT(day) DO NOTHING
+            """,
+            (day, anchor, due_day, predicted_move, model_move, train_n, parts),
+        )
+        self.conn.commit()
+        return cursor.rowcount == 1
+
+    def finish_ahead(self, day: str, actual: float | None, status: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE ahead_calls SET actual_move = ?, status = ?
+            WHERE day = ? AND status = 'open'
+            """,
+            (actual, status, day),
+        )
+        self.conn.commit()
+
+    def save_snapshots(self, day: str, values: dict[str, float]) -> None:
+        self.conn.executemany(
+            """
+            INSERT INTO ahead_snapshots (day, name, value) VALUES (?, ?, ?)
+            ON CONFLICT(day, name) DO NOTHING
+            """,
+            [(day, name, value) for name, value in values.items()],
+        )
+        self.conn.commit()
+
+    def snapshots(self, day: str) -> dict[str, float]:
+        rows = self.conn.execute(
+            "SELECT name, value FROM ahead_snapshots WHERE day = ?",
+            (day,),
+        ).fetchall()
+        return {row["name"]: float(row["value"]) for row in rows}
+
+    def previous_snapshot(self, name: str, day: str) -> float | None:
+        row = self.conn.execute(
+            """
+            SELECT value FROM ahead_snapshots
+            WHERE name = ? AND day < ?
+            ORDER BY day DESC LIMIT 1
+            """,
+            (name, day),
+        ).fetchone()
+        return None if row is None else float(row["value"])
+
+    def ahead_drivers(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM ahead_drivers ORDER BY name").fetchall()
+
+    def ensure_ahead_driver(self, name: str, status: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO ahead_drivers (name, status, contribution) VALUES (?, ?, 0)
+            ON CONFLICT(name) DO NOTHING
+            """,
+            (name, status),
+        )
+        self.conn.commit()
+
+    def set_ahead_driver(self, name: str, status: str, contribution: float) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO ahead_drivers (name, status, contribution) VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                status = excluded.status,
+                contribution = excluded.contribution
+            """,
+            (name, status, contribution),
+        )
+        self.conn.commit()
+
+    def set_ahead_status(self, name: str, status: str) -> None:
+        self.conn.execute("UPDATE ahead_drivers SET status = ? WHERE name = ?", (status, name))
+        self.conn.commit()
 
     def level_pairs(self, name: str) -> list[tuple[float, float]]:
         rows = self.conn.execute(

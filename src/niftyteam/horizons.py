@@ -13,6 +13,15 @@ def session_close(stamp: datetime) -> datetime:
     return _next_mark(stamp, time(15, 30))
 
 
+def decision_due(stamp: datetime) -> datetime | None:
+    """Next cash close for the weekday tick at or after 16:00 IST."""
+    if stamp.weekday() >= 5:
+        return None
+    if stamp.timetz().replace(tzinfo=None) < time(16, 0):
+        return None
+    return session_close(stamp)
+
+
 def last_cash_close(bars: list, stamp: datetime) -> float | None:
     today = stamp.date().isoformat()
     done = []
