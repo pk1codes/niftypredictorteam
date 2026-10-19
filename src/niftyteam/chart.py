@@ -6,6 +6,7 @@ from html import escape
 from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
+from niftyteam.horizons import session_close
 from niftyteam.learn import agent_misses, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
@@ -39,7 +40,7 @@ def render_page(
     status = _status(last_run)
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True)
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr")
-    called = _compare_html(ensemble, history or [])
+    called = _compare_html(ensemble, history or [], nifty)
     outlook = _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
     return f"""<!DOCTYPE html>
@@ -93,7 +94,7 @@ def render_page(
   .matters section {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; padding: 12px 14px 10px; }}
   .matters section:first-child {{ box-shadow: inset 3px 0 0 #1d4e89; }}
   .matters section:last-child {{ box-shadow: inset 3px 0 0 #c4a574; }}
-  .matters h2, .ahead h2 {{ margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
+  .matters h2, .ahead h2, .compare h2 {{ margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .matters h2 .impact, .ahead h2 .impact {{ letter-spacing: 0; font-size: 22px; }}
   .matter {{ display: flex; gap: 10px; align-items: baseline; padding: 8px; margin-top: 6px; border-radius: 8px; }}
   .matter.ok {{ background: #f7f8f6; }}
@@ -131,14 +132,8 @@ def render_page(
   .ahead .name {{ width: auto; flex: 1; }}
   .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
-  .compare .pair {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }}
-  .compare .pair > div {{ border-radius: 10px; padding: 10px 12px; }}
-  .compare .was {{ background: #f7f5f1; }}
-  .compare .called {{ background: #f4f7fb; }}
-  .compare .arrived {{ background: #f3faf6; }}
-  .compare .will {{ background: #f7f3fb; }}
-  .compare .pair span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
-  .compare .pair strong {{ display: block; margin-top: 4px; font: 600 22px/1.1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .compare .story {{ margin: 8px 0 0; color: #1c1915; font: 16px/1.5 ui-sans-serif, sans-serif; }}
+  .compare .story strong {{ font-variant-numeric: tabular-nums; }}
   .learn {{ margin-top: 16px; }}
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; margin: 0 0 16px; padding: 12px 14px 14px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
@@ -153,7 +148,7 @@ def render_page(
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
     .split, .matters, .desk, .stats, .feed-row, .learn-grid {{ grid-template-columns: 1fr; }}
-    .compare .pair {{ grid-template-columns: 1fr 1fr; }}
+    .compare .story {{ font-size: 15px; }}
   }}
 </style>
 </head>
@@ -268,35 +263,74 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
     return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong></div>"
 
 
-def _compare_html(ensemble: Ensemble | None, history: list[Ensemble]) -> str:
+def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: float | None = None) -> str:
     finished, forward = _settled_calls(ensemble, history)
-    if finished is None and forward is None:
+    stories = []
+    if finished is not None and finished.nifty_level is not None and finished.actual is not None:
+        stories.append(f"<p class='story'>{_scored_call(finished)}</p>")
+    if forward is not None and forward.nifty_level is not None:
+        stories.append(f"<p class='story'>{_open_call(forward, nifty)}</p>")
+    if not stories:
         return ""
-    was = None if finished is None or finished.nifty_level is None else finished.nifty_level
-    called = None if was is None else was + finished.mu
-    arrived = None if was is None or finished.actual is None else was + finished.actual
-    coming = None if forward is None or forward.nifty_level is None else forward.nifty_level + forward.mu
-    marks = []
-    if was is not None:
-        marks.append(("Was", was, "#746c62"))
-    if called is not None:
-        marks.append(("Called", called, "#1d4e89"))
-    if arrived is not None:
-        marks.append(("Is", arrived, "#0c7a3a"))
-    if coming is not None:
-        marks.append(("Will", coming, "#6b3fa0"))
+    body = "".join(stories)
     return (
         "<section class='compare' aria-label='Called against Nifty'>"
-        "<p class='deck'>The last call that has a close, then the one still open.</p>"
-        "<div class='pair'>"
-        f"{_level_card('was', 'Nifty was', was)}"
-        f"{_level_card('called', 'Prediction was', called)}"
-        f"{_level_card('arrived', 'Nifty is', arrived)}"
-        f"{_level_card('will', 'Nifty will be', coming)}"
-        "</div>"
-        f"{_compare_bar(marks)}"
+        "<h2>Called</h2>"
+        f"{body}"
         "</section>"
     )
+
+
+def _scored_call(row: Ensemble) -> str:
+    made = parse_ts(row.ts)
+    due = session_close(made)
+    anchor = row.nifty_level or 0
+    predicted = anchor + row.mu
+    observed = anchor + (row.actual or 0)
+    made_at, made_on = _stamp_bits(made)
+    due_at, due_on = _stamp_bits(due)
+    return (
+        f"Prediction was made when Nifty 50 was {_bold(_level_text(anchor))} "
+        f"at {_bold(made_at)} on {_bold(made_on)}. "
+        f"It predicted Nifty 50 would be {_bold(_level_text(predicted))} "
+        f"at {_bold(due_at)} on {_bold(due_on)}. "
+        f"Nifty 50 was observed at {_bold(_level_text(observed))} then "
+        f"({_deviation(observed - predicted)})."
+    )
+
+
+def _open_call(row: Ensemble, nifty: float | None) -> str:
+    made = parse_ts(row.ts)
+    due = session_close(made)
+    anchor = row.nifty_level or 0
+    predicted = anchor + row.mu
+    made_at, made_on = _stamp_bits(made)
+    due_at, due_on = _stamp_bits(due)
+    sentence = (
+        f"The open call was made when Nifty 50 was {_bold(_level_text(anchor))} "
+        f"at {_bold(made_at)} on {_bold(made_on)}. "
+        f"It predicts Nifty 50 will be {_bold(_level_text(predicted))} "
+        f"at {_bold(due_at)} on {_bold(due_on)}."
+    )
+    if nifty is None:
+        return sentence
+    return (
+        f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))} "
+        f"({_deviation(nifty - predicted, 'deviation so far')})."
+    )
+
+
+def _stamp_bits(stamp: datetime) -> tuple[str, str]:
+    return stamp.strftime("%H:%M"), stamp.strftime("%d %b")
+
+
+def _bold(text: str) -> str:
+    return f"<strong>{escape(text)}</strong>"
+
+
+def _deviation(value: float, label: str = "deviation") -> str:
+    kind = impact_class(value)
+    return f"{label} <strong class='{kind}'>{impact_text(value)}</strong>"
 
 
 def _settled_calls(ensemble: Ensemble | None, history: list[Ensemble]) -> tuple[Ensemble | None, Ensemble | None]:
@@ -312,53 +346,6 @@ def _settled_calls(ensemble: Ensemble | None, history: list[Ensemble]) -> tuple[
     if finished is not None and forward is not None and forward.ts < finished.ts:
         forward = None
     return finished, forward
-
-
-def _level_card(kind: str, label: str, level: float | None) -> str:
-    shown = "—" if level is None else _level_text(level)
-    return f"<div class='{kind}'><span>{escape(label)}</span><strong>{shown}</strong></div>"
-
-
-def _compare_bar(marks: list[tuple[str, float, str]]) -> str:
-    if len(marks) < 2:
-        return ""
-    values = [value for _name, value, _color in marks]
-    lo, hi = min(values), max(values)
-    cushion = max((hi - lo) * 0.12, 20)
-    lo -= cushion
-    hi += cushion
-    width, pad, baseline = 400, 28, 36
-    span = hi - lo or 1
-
-    def sx(value: float) -> float:
-        return pad + (value - lo) / span * (width - 2 * pad)
-
-    placed = []
-    dots = []
-    labels = []
-    label_row = 0
-    for name, value, color in marks:
-        x = sx(value)
-        lift = 0
-        while any(abs(x - other) < 10 and lift == height for other, height in placed):
-            lift += 8
-        placed.append((x, lift))
-        row = 1 if any(abs(x - other) < 52 for other, _height in placed[:-1]) else 0
-        label_row = max(label_row, row)
-        dots.append(
-            f"<line x1='{x:.1f}' y1='{baseline - 14 - lift}' x2='{x:.1f}' y2='{baseline}' stroke='{color}' stroke-width='2'/>"
-            f"<circle cx='{x:.1f}' cy='{baseline - 14 - lift}' r='4' fill='{color}'/>"
-        )
-        labels.append(
-            f"<text x='{x:.1f}' y='{baseline + 16 + row * 14}' text-anchor='middle' font-size='11' fill='{color}'>{escape(name)}</text>"
-        )
-    height = 78 + label_row * 14
-    return (
-        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Called against Nifty' "
-        "style='font-family:ui-sans-serif,sans-serif'>"
-        f"<line x1='{pad}' y1='{baseline}' x2='{width - pad}' y2='{baseline}' stroke='#e4ddd2'/>"
-        f"{''.join(dots)}{''.join(labels)}</svg>"
-    )
 
 
 def _ahead_html(ahead: dict | None) -> str:

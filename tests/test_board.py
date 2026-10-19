@@ -188,25 +188,31 @@ def test_called_level_sits_beside_the_live_nifty():
     call = Ensemble(id="e", ts="2026-10-19T10:00:00+05:30", mu=15, sigma=20, n_shocks=1, nifty_level=24900)
     page = render_page(call, [], [], 24910, 0, history=[done, call])
     card = page.split("aria-label='Called against Nifty'", 1)[1].split("</section>", 1)[0]
-    assert "Nifty was" in card
+    assert "Prediction was made when Nifty 50 was" in card
     assert "24,800" in card
-    assert "Prediction was" in card
+    assert "at <strong>10:00</strong> on <strong>16 Oct</strong>" in card
+    assert "would be" in card
     assert "24,840" in card
-    assert "Nifty is" in card
+    assert "at <strong>15:30</strong> on <strong>16 Oct</strong>" in card
+    assert "observed at" in card
     assert "24,810" in card
-    assert "Nifty will be" in card
+    assert "deviation <strong class='minus'>-30</strong>" in card
+    assert "The open call was made when Nifty 50 was" in card
+    assert "24,900" in card
+    assert "at <strong>10:00</strong> on <strong>19 Oct</strong>" in card
+    assert "will be" in card
     assert "24,915" in card
-    assert ">Was<" in card
-    assert ">Called<" in card
-    assert ">Is<" in card
-    assert ">Will<" in card
-    assert "24,910" not in card
+    assert "at <strong>15:30</strong> on <strong>19 Oct</strong>" in card
+    assert "Live Nifty 50 is" in card
+    assert "24,910" in card
+    assert "deviation so far <strong class='minus'>-5</strong>" in card
     pending = render_page(call, [], [], None, 0)
-    assert "Nifty will be" in pending
+    assert "will be" in pending
     assert "24,915" in pending
-    assert pending.count("<strong>—</strong>") == 3
+    assert "Live Nifty 50 is" not in pending
+    assert "observed at" not in pending
     blank = render_page(None, [], [], 24810, 0)
-    assert "Nifty was" not in blank
+    assert "Prediction was made" not in blank
 
 
 def test_mover_total_sums_the_shown_numbers():
