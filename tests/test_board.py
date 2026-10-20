@@ -235,6 +235,33 @@ def test_called_level_sits_beside_the_live_nifty():
     assert "Prediction was made" not in blank
 
 
+def test_topline_puts_the_last_close_next_open_and_gift_first():
+    done = Ensemble(
+        id="old", ts="2026-10-16T10:00:00+05:30", mu=40, sigma=20, n_shocks=2, nifty_level=24800, actual=10,
+    )
+    opened = Ensemble(
+        id="op", ts="2026-10-19T16:00:00+05:30", mu=25, sigma=10, n_shocks=1,
+        nifty_level=24810, horizon="open",
+    )
+    page = render_page(
+        None, [], [], 24810, 1, gift={"price": 24900, "change": 15}, history=[done], open_call=opened,
+    )
+    top = page.split("aria-label='Calls at a glance'", 1)[1].split("</section>", 1)[0]
+    assert top.index("Last close") < top.index("Next open") < top.index("GIFT Nifty")
+    assert "24,840" in top
+    assert "24,810" in top
+    assert ">-30<" in top or "-30" in top
+    assert "24,835" in top
+    assert "09:15" in top
+    assert "20 Oct" in top
+    assert "24,900" in top
+    assert "+15" in top
+    assert "Called 24,840" in top
+    assert "Nifty 24,810" in top
+    assert "Open 24,835" in top
+    assert "GIFT 24,900" in top
+
+
 def test_mover_total_sums_the_shown_numbers():
     rows = [
         ("World", "Gold", "ok", -47.6),

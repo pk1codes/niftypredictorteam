@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
 from niftyteam.estimate import news_shifts
-from niftyteam.horizons import session_close
+from niftyteam.horizons import next_open, session_close
 from niftyteam.learn import agent_misses, learning_score, learning_trail, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
@@ -44,6 +44,7 @@ def render_page(
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Offshore Nifty. Plus leans the next open up.")
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
     called = _compare_html(ensemble, history or [], nifty)
+    topline = _topline(history or [], gift, open_call)
     outlook = _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
     return f"""<!DOCTYPE html>
@@ -69,6 +70,17 @@ def render_page(
     100% {{ box-shadow: 0 0 0 0 rgba(12, 122, 58, 0); }}
   }}
   .state {{ color: #1c1915; font-weight: 650; }}
+  .topline {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 12px 14px 4px; box-shadow: inset 0 3px 0 #1d4e89; }}
+  .top-grid {{ display: grid; grid-template-columns: 1.5fr .9fr .9fr; gap: 12px; }}
+  .top-card span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
+  .top-pair {{ display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-top: 6px; }}
+  .top-pair b {{ display: block; color: #1c1915; font: 600 26px/1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .top-pair small {{ display: block; margin-top: 4px; color: #746c62; font: 600 13px/1.2 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; }}
+  .top-pair small.plus {{ color: #0c7a3a; }}
+  .top-pair small.minus {{ color: #c62828; }}
+  .top-pair .plus b {{ color: #0c7a3a; }}
+  .top-pair .minus b {{ color: #c62828; }}
+  .topline .call-plot {{ margin-top: 4px; }}
   .stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; }}
   .stats .tile {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; padding: 14px 16px; min-width: 0; }}
   .stats .tile.plus {{ background: #f3faf6; border-color: #d5eadc; }}
@@ -208,7 +220,7 @@ def render_page(
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .stats, .feed-row, .learn-grid, .news-cols {{ grid-template-columns: 1fr; }}
+    .split, .matters, .desk, .stats, .feed-row, .learn-grid, .news-cols, .top-grid {{ grid-template-columns: 1fr; }}
     .compare .story {{ font-size: 15px; }}
   }}
 </style>
@@ -223,6 +235,7 @@ def render_page(
     {status}
   </header>
   <p class="lead">One call for the 15:30 close. Green is up. Red is down.</p>
+  {topline}
   <div class="stats">
     {gift_tile}
     {fii_tile}
@@ -474,6 +487,131 @@ def _quote_tile(label: str, value: float | None, tint: float | None, suffix: str
         kind = impact_class(0 if tint is None else tint)
     note = f"<em>{escape(hint)}</em>" if hint else ""
     return f"<div class='tile {kind}'><span>{escape(label)}</span><strong class='{kind}'>{escape(shown)}</strong>{note}</div>"
+
+
+def _topline(history: list[Ensemble], gift: dict | None, open_call: Ensemble | None) -> str:
+    closed = _last_closed(history)
+    opened = _next_open_call(history, open_call)
+    gift_bits = _gift_bits(gift)
+    if closed is None and opened is None and gift_bits is None:
+        return ""
+    cards = []
+    marks: list[tuple[str, float, str]] = []
+    if closed is not None:
+        called, landed, diff = closed
+        cards.append(
+            "<div class='top-card'>"
+            "<span>Last close</span>"
+            "<div class='top-pair'>"
+            f"<p><b>{_level_text(called)}</b><small>called</small></p>"
+            f"<p><b>{_level_text(landed)}</b><small>Nifty was</small></p>"
+            f"<p class='{impact_class(diff)}'><b>{impact_text(diff)}</b><small>diff</small></p>"
+            "</div></div>"
+        )
+        marks.append(("Called", called, "#6b3fa0"))
+        landed_color = {"plus": "#0c7a3a", "minus": "#c62828", "flat": "#5e584f"}[impact_class(diff)]
+        marks.append(("Nifty", landed, landed_color))
+    if opened is not None:
+        level, due = opened
+        at, on = _stamp_bits(due)
+        cards.append(
+            "<div class='top-card'>"
+            "<span>Next open</span>"
+            "<div class='top-pair'>"
+            f"<p><b>{_level_text(level)}</b><small>{escape(at)} · {escape(on)}</small></p>"
+            "</div></div>"
+        )
+        marks.append(("Open", level, "#1d4e89"))
+    if gift_bits is not None:
+        shown, extra, kind = gift_bits
+        change = f"<small class='{kind}'>{escape(extra)}</small>" if extra else "<small>offshore</small>"
+        cards.append(
+            f"<div class='top-card'>"
+            "<span>GIFT Nifty</span>"
+            "<div class='top-pair'>"
+            f"<p><b>{escape(shown)}</b>{change}</p>"
+            "</div></div>"
+        )
+        if gift is not None and gift.get("price") is not None:
+            marks.append(("GIFT", float(gift["price"]), "#b86e00"))
+    plot = _glance_plot(marks) if len(marks) >= 2 else ""
+    return (
+        "<section class='topline' aria-label='Calls at a glance'>"
+        f"<div class='top-grid'>{''.join(cards)}</div>"
+        f"{plot}</section>"
+    )
+
+
+def _last_closed(history: list[Ensemble]) -> tuple[float, float, float] | None:
+    done = [
+        row for row in history
+        if row.horizon == "session" and row.nifty_level is not None and row.actual is not None
+    ]
+    if not done:
+        return None
+    row = max(done, key=lambda item: item.ts)
+    called = row.nifty_level + row.mu
+    landed = row.nifty_level + row.actual
+    return called, landed, landed - called
+
+
+def _next_open_call(history: list[Ensemble], open_call: Ensemble | None) -> tuple[float, datetime] | None:
+    rows = [row for row in history if row.horizon == "open" and row.nifty_level is not None and row.actual is None]
+    if open_call is not None and open_call.horizon == "open" and open_call.nifty_level is not None and open_call.actual is None:
+        if all(row.id != open_call.id for row in rows):
+            rows.append(open_call)
+    if not rows:
+        return None
+    row = max(rows, key=lambda item: item.ts)
+    return (row.nifty_level or 0) + row.mu, next_open(parse_ts(row.ts))
+
+
+def _gift_bits(gift: dict | None) -> tuple[str, str, str] | None:
+    if not gift or gift.get("price") is None:
+        return None
+    price = float(gift["price"])
+    change = gift.get("change")
+    shown = f"{price:,.0f}"
+    if change is None:
+        return shown, "", "flat"
+    number = int(change) if float(change).is_integer() else change
+    extra = impact_text(number) if isinstance(number, int) else f"{float(number):+.1f}"
+    return shown, extra, impact_class(float(change))
+
+
+def _glance_plot(marks: list[tuple[str, float, str]]) -> str:
+    lo, hi = _call_bounds([value for _name, value, _color in marks])
+    width, pad_x, baseline = 640, 16, 28
+    span = hi - lo or 1
+
+    def sx(value: float) -> float:
+        return pad_x + (value - lo) / span * (width - 2 * pad_x)
+
+    placed = [(name, sx(value), color, f"{name} {_level_text(value)}") for name, value, color in marks]
+    spans = [_label_span(x, text, width) for _name, x, _color, text in placed]
+    rows = _label_rows(spans)
+    height = baseline + 18 + (max(rows) + 1) * 16 + 4
+    parts = [
+        f"<svg class='call-plot' viewBox='0 0 {width} {height}' role='img' aria-label='Calls on one scale' "
+        "style='font-family:ui-sans-serif,sans-serif'>"
+        f"<line x1='{pad_x}' y1='{baseline}' x2='{width - pad_x}' y2='{baseline}' stroke='#e4ddd2' stroke-width='4' stroke-linecap='round'/>"
+    ]
+    by_name = {name: value for name, value, _color in marks}
+    if "Called" in by_name and "Nifty" in by_name:
+        left, right = sorted((sx(by_name["Called"]), sx(by_name["Nifty"])))
+        color = next(item[2] for item in marks if item[0] == "Nifty")
+        parts.append(
+            f"<line x1='{left:.1f}' y1='{baseline}' x2='{right:.1f}' y2='{baseline}' stroke='{color}' stroke-width='4' stroke-linecap='round'/>"
+        )
+    for name, x, color, _text in placed:
+        parts.append(f"<circle cx='{x:.1f}' cy='{baseline}' r='5' fill='{color}' stroke='#fff' stroke-width='1.5'/>")
+    for (_name, _x, _color, text), (lx, anchor_name, _left, _right), row in zip(placed, spans, rows):
+        y = baseline + 18 + row * 16
+        parts.append(
+            f"<text x='{lx:.1f}' y='{y}' text-anchor='{anchor_name}' font-size='11' fill='#1c1915'>{escape(text)}</text>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: float | None = None) -> str:
