@@ -145,18 +145,18 @@ def test_score_updates_weight_and_chart_colors():
     )
     assert "GIFT Nifty" in page
     assert "23,085" in page
-    forecast = page.split("aria-label='Forecast'", 1)[1].split("</svg>", 1)[0]
+    forecast = page.split("aria-label='Prediction'", 1)[1].split("</svg>", 1)[0]
     assert "Spot 25,000" in forecast
     assert "GIFT 23,085" in forecast
     assert "Next -35" in forecast
-    assert "Mean 24,494" in forecast
+    assert "Average 24,494" in forecast
     assert "10,000" not in forecast
     assert "stroke='#0c7a3a'" in forecast
     assert "stroke='#b86e00'" in forecast
     assert "stroke='#1d4e89'" in forecast
     assert "stroke='#6b3fa0'" in forecast
-    assert "200-day mean" in page
-    assert "previous three bells" in page
+    assert "200-day average" in page
+    assert "previous three" in page
     assert "stroke-opacity='0.18'" in forecast
     assert "stroke-opacity='0.35'" in forecast
     assert "stroke-opacity='0.55'" in forecast
@@ -166,7 +166,7 @@ def test_score_updates_weight_and_chart_colors():
     assert "+1,166 cr" in page
     assert "class='impact minus'>-60" in page
     assert "class='impact plus'>+20" in page
-    assert "<h2>Moving the forecast<span class='impact minus'>-40</span></h2>" in page
+    assert "<h2>Moving the prediction<span class='impact minus'>-40</span></h2>" in page
     assert impact_class(0) == "flat"
     assert "class='light on'" in page
     assert f"Last run {stamp.strftime('%d %b %H:%M')}" in page
@@ -174,18 +174,18 @@ def test_score_updates_weight_and_chart_colors():
     assert "Scout looked across the web." in page
     assert "Market shut" in page
     assert "Oil jumps" in page
-    assert "Spread 22" in page
-    assert "Scored an open call." in page
+    assert "Range 22" in page
+    assert "Checked the open prediction." in page
     assert "Needs a look" not in page
     assert "Watching. Every agent is working." in page
-    assert "The call was -35." in page
+    assert "The prediction was -35." in page
     assert "Crude added -60: Oil jumps." in page
     assert "World added +20: Asia higher." in page
     assert "Rupee, Policy and Flows were quiet." in page
     assert "Options found the market shut." in page
     assert "Weights had no answer." in page
-    assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · mean +8" in page
-    assert "The call was +8." in page
+    assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · prediction +8" in page
+    assert "The prediction was +8." in page
 
 
 def test_called_level_sits_beside_the_live_nifty():
@@ -194,17 +194,17 @@ def test_called_level_sits_beside_the_live_nifty():
     )
     call = Ensemble(id="e", ts="2026-10-19T10:00:00+05:30", mu=15, sigma=20, n_shocks=1, nifty_level=24900)
     page = render_page(call, [], [], 24910, 0, history=[done, call])
-    card = page.split("aria-label='Called against Nifty'", 1)[1].split("</section>", 1)[0]
+    card = page.split("aria-label='Prediction against Nifty'", 1)[1].split("</section>", 1)[0]
     assert "Prediction was made when Nifty 50 was" in card
     assert "24,800" in card
     assert "at <strong>10:00</strong> on <strong>16 Oct</strong>" in card
     assert "would be" in card
     assert "24,840" in card
     assert "at <strong>15:30</strong> on <strong>16 Oct</strong>" in card
-    assert "observed at" in card
+    assert "Nifty 50 was <strong>24,810</strong> then" in card
     assert "24,810" in card
-    assert "deviation <strong class='minus'>-30</strong>" in card
-    assert "The open call was made when Nifty 50 was" in card
+    assert "off by <strong class='minus'>-30</strong>" in card
+    assert "This prediction was made when Nifty 50 was" in card
     assert "24,900" in card
     assert "at <strong>10:00</strong> on <strong>19 Oct</strong>" in card
     assert "will be" in card
@@ -212,24 +212,24 @@ def test_called_level_sits_beside_the_live_nifty():
     assert "at <strong>15:30</strong> on <strong>19 Oct</strong>" in card
     assert "Live Nifty 50 is" in card
     assert "24,910" in card
-    assert "deviation so far <strong class='minus'>-5</strong>" in card
+    assert "off so far <strong class='minus'>-5</strong>" in card
     assert "aria-label='Last close'" in card
-    assert "aria-label='Still open'" in card
+    assert "aria-label='Still waiting'" in card
     assert "When 24,800" in card
-    assert "Called 24,840" in card
+    assert "Predicted 24,840" in card
     assert "Seen 24,810" in card
     assert "When 24,900" in card
-    assert "Called 24,915" in card
+    assert "Predicted 24,915" in card
     assert "Live 24,910" in card
     assert "stroke='#c62828'" in card
     pending = render_page(call, [], [], None, 0)
     assert "will be" in pending
     assert "24,915" in pending
     assert "Live Nifty 50 is" not in pending
-    assert "observed at" not in pending
-    open_plot = pending.split("aria-label='Still open'", 1)[1].split("</svg>", 1)[0]
+    assert " then (" not in pending
+    open_plot = pending.split("aria-label='Still waiting'", 1)[1].split("</svg>", 1)[0]
     assert "When 24,900" in open_plot
-    assert "Called 24,915" in open_plot
+    assert "Predicted 24,915" in open_plot
     assert "Live " not in open_plot
     blank = render_page(None, [], [], 24810, 0)
     assert "Prediction was made" not in blank
@@ -246,7 +246,7 @@ def test_topline_puts_the_last_close_next_open_and_gift_first():
     page = render_page(
         None, [], [], 24810, 1, gift={"price": 24900, "change": 15}, history=[done], open_call=opened,
     )
-    top = page.split("aria-label='Calls at a glance'", 1)[1].split("</section>", 1)[0]
+    top = page.split("aria-label='Predictions at a glance'", 1)[1].split("</section>", 1)[0]
     assert top.index("Last close") < top.index("Next open") < top.index("GIFT Nifty")
     assert "24,840" in top
     assert "24,810" in top
@@ -256,7 +256,7 @@ def test_topline_puts_the_last_close_next_open_and_gift_first():
     assert "20 Oct" in top
     assert "24,900" in top
     assert "+15" in top
-    assert "Called 24,840" in top
+    assert "Predicted 24,840" in top
     assert "Nifty 24,810" in top
     assert "Open 24,835" in top
     assert "GIFT 24,900" in top
@@ -330,7 +330,7 @@ def test_news_shifts_split_heavier_from_lighter():
     block = page.split("id='news'", 1)[1].split("</section>", 1)[0]
     assert "RBI tightening" in block.split(">Lighter<", 1)[0]
     assert "Oil easing" in block.split(">Lighter<", 1)[1]
-    assert "Headline weights start after a scored story." in render_page(None, [], [], None, 0)
+    assert "Headline weights start after a story is checked." in render_page(None, [], [], None, 0)
 
 
 def test_error_is_split_and_reused():
@@ -455,7 +455,7 @@ def test_accuracy_notes_cover_gaps():
     assert "market is shut" in text
     assert "FII flow did not answer" in text
     assert "yahoo-crude" in text
-    assert "no call has been scored" in text
+    assert "no prediction has been checked" in text
     quiet = accuracy_notes(
         nifty=25000,
         news_answered=True,
@@ -728,7 +728,7 @@ def test_learning_row_shows_the_next_shift():
     claim.ts = now.isoformat()
     page = render_page(None, [], [], 25000, 4, claims=[claim])
     assert "Not enough scores" in page
-    assert "The board line starts after 4 scored calls." in page
+    assert "The board line starts after 4 checked predictions." in page
     row = page.split(">World<", 1)[1].split("</div>", 1)[0]
     assert "+2" in row
 
@@ -755,7 +755,7 @@ def test_improving_rises_when_later_misses_shrink():
     score = learning_score(misses)
     assert score > 50
     assert f"class='gain up'>{score}" in page
-    assert "Tighter" in page
+    assert "Better" in page
     line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
     assert "stroke='#0c7a3a'" in line
     row = page.split(">World<", 1)[1].split("</svg>", 1)[0]
@@ -769,7 +769,7 @@ def test_improving_falls_when_later_misses_grow():
     score = learning_score(misses)
     assert score < 50
     assert f"class='gain down'>{score}" in page
-    assert "Wider" in page
+    assert "Worse" in page
     line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
     assert "stroke='#c62828'" in line
 
@@ -828,8 +828,8 @@ def test_important_feeds_show_that_they_were_checked():
     assert "Pulse" in page
     assert "Checked · 8 stories" in page
     assert "CoreWeave jumps" in page
-    assert "1 of 1 entered the call, adding <strong class='plus'>+8</strong>." in page
-    assert "No proof it cannot move Nifty." in page
+    assert "1 of 1 went into the prediction, adding <strong class='plus'>+8</strong>." in page
+    assert "Kept, because it may move Nifty." in page
     assert "class='feed bad'" in page
     assert "Tijori" in page
     assert "No answer" in page

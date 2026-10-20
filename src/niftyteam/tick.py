@@ -416,11 +416,11 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                         continue
                     guess = judged["guess"]
                     if guess is None:
-                        readings.append(_reading(item["title"], "Kept. No proved direction, so no points."))
+                        readings.append(_reading(item["title"], "Kept. No clear up or down, so no points."))
                         kept_titles.append(item["title"])
                         continue
                     if judged["verdict"] == "keep":
-                        kept_note = f"Kept, {impact_text(guess['midpoint'])}. Not proved irrelevant."
+                        kept_note = f"Kept, {impact_text(guess['midpoint'])}. It may still move Nifty."
                     else:
                         kept_note = ""
                 else:
@@ -443,7 +443,7 @@ def _news(store: Store, config: dict, stamp, nifty: float | None, soften: bool =
                         used = claim.headline
                         used_abs = abs(claim.midpoint)
                 if important:
-                    note = kept_note or f"In the call {impact_text(guess['midpoint'])}."
+                    note = kept_note or f"In the prediction {impact_text(guess['midpoint'])}."
                     readings.append(_reading(item["title"], note))
             if source.id in watch:
                 detail = _feed_detail(len(items), "") if readings else _feed_detail(len(items), used)
@@ -767,7 +767,7 @@ def accuracy_notes(
 ) -> list[str]:
     notes = []
     if nifty is None:
-        notes.append("Boss: Nifty price is missing. Calls from this hour cannot be scored.")
+        notes.append("Boss: Nifty price is missing. This hour’s predictions cannot be checked.")
     if gift_missing:
         notes.append("Boss: GIFT Nifty value is missing.")
     if not news_answered:
@@ -788,7 +788,7 @@ def accuracy_notes(
         shown = ", ".join(down_ids[:6])
         notes.append(f"Boss: {len(down_ids)} feeds are down and out of the mean. {shown}.")
     if not scored:
-        notes.append("Boss: no call has been scored yet, so trust weights are still the starting values.")
+        notes.append("Boss: no prediction has been checked yet, so trust weights are still the starting values.")
     return notes
 
 
@@ -884,12 +884,12 @@ def _score(store: Store, config: dict, stamp, bars: list[tuple[str, float]]) -> 
         inside = ""
         ensemble = _ensemble_by_id(store, claim.ensemble_id) if claim.ensemble_id else None
         if ensemble is not None and abs(actual - ensemble.mu) <= ensemble.sigma:
-            inside = " Inside the curve."
+            inside = " Inside the expected range."
         miss = abs(claim.residual)
-        label = claim.horizon if claim.horizon in {"open", "week"} else "session"
+        label = {"open": "open", "week": "week"}.get(claim.horizon, "close")
         store.add_event(
             stamp.isoformat(),
-            f"Scored the {label} call. Nifty {word} {abs(actual):.0f}. Missed the mean by {miss:.0f}.{inside}",
+            f"Checked the {label} prediction. Nifty {word} {abs(actual):.0f}. Off by {miss:.0f}.{inside}",
             actual,
             agent="score",
         )
@@ -932,13 +932,13 @@ def _log_roster(store, stamp, news_lines, pcr_claims, chain_state, fii_claims, f
     lines["flows"] = _prefer(lines.get("flows", (NO_ANSWER, 0)), _fii_line(store, fii_claims, fii_worked, fii_failed))
     lines["pcr"] = _pcr_line(pcr_claims, chain_state)
     if ensemble is not None and ensemble.ts == stamp.isoformat():
-        board = (f"Spread {ensemble.sigma:.0f}", ensemble.mu)
+        board = (f"Range {ensemble.sigma:.0f}", ensemble.mu)
     elif open_call is not None and open_call.ts == stamp.isoformat():
         board = (f"Open {impact_text(open_call.mu)}", open_call.mu)
     else:
         board = (QUIET, 0.0)
     if open_call is not None and ensemble is not None and open_call.ts == stamp.isoformat() and ensemble.ts == stamp.isoformat():
-        board = (f"Open {impact_text(open_call.mu)}. Spread {ensemble.sigma:.0f}.", ensemble.mu)
+        board = (f"Open {impact_text(open_call.mu)}. Range {ensemble.sigma:.0f}.", ensemble.mu)
     have = {row.agent for row in store.events(20) if row.ts == stamp.isoformat() and row.agent}
     for key, _name in ROSTER:
         if key in have:

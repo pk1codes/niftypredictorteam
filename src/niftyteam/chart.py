@@ -39,9 +39,9 @@ def render_page(
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
     early = ""
     if scored < 30:
-        early = f"<p class='note'>Early path. {scored} scored forecasts. It settles after a few dozen checks, so read it as a sketch.</p>"
+        early = f"<p class='note'>Early days. {scored} predictions checked. The line settles after a few dozen checks, so treat it as a first look.</p>"
     status = _status(last_run)
-    gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Offshore Nifty. Plus leans the next open up.")
+    gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Traded outside India. A plus means the next open may be higher.")
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
     called = _compare_html(ensemble, history or [], nifty)
     topline = _topline(history or [], gift, open_call)
@@ -234,7 +234,7 @@ def render_page(
     </div>
     {status}
   </header>
-  <p class="lead">One call for the 15:30 close. Green is up. Red is down.</p>
+  <p class="lead">One prediction for the 15:30 close. Green is up. Red is down.</p>
   {topline}
   <div class="stats">
     {gift_tile}
@@ -242,10 +242,10 @@ def render_page(
   </div>
   {early}
   {_feeds_html(feeds)}
-  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
+  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the price outside India. <span class="mark-next">Next</span> is this hour’s prediction. The shaded band is the usual range around the <span class="mark-mean">200-day average</span>. Faint lines are the previous three.</figcaption></figure>
   {split}
   {_matters(events)}
-  <figure class="errors">{errors}<figcaption>Each dot is one past call, oldest on the left. Below zero, the call was too high. Above zero, it was too low. The dashed line is the average miss. The curve is the recent path of the close calls.</figcaption></figure>
+  <figure class="errors">{errors}<figcaption>Each dot is one past prediction, oldest on the left. Below zero, the prediction was too high. Above zero, it was too low. The dashed line is the average miss. The curve is the recent path of the close predictions.</figcaption></figure>
   {log}
   {news}
   {learning}
@@ -292,7 +292,7 @@ def _feeds_html(feeds: list[dict] | None) -> str:
     return (
         "<section class='feeds' aria-label='Important feeds'>"
         "<h2>Important feeds</h2>"
-        "<p class='deck'>A story is set aside only when it cannot move Nifty. The rest stay on watch. Points are added only when the words have a direction.</p>"
+        "<p class='deck'>A story is set aside only when it cannot move Nifty. The rest stay on watch. Points are added only when the story clearly says up or down.</p>"
         f"{summary_html}"
         f"<div class='feed-row'>{''.join(cards)}</div></section>"
     )
@@ -304,14 +304,14 @@ def _feeds_summary(totals: dict[str, int]) -> str:
         return ""
     if totals["used"]:
         lead = (
-            f"{totals['used']} of {total} entered the call, adding "
+            f"{totals['used']} of {total} went into the prediction, adding "
             f"<strong class='{impact_class(totals['points'])}'>{impact_text(totals['points'])}</strong>."
         )
     else:
-        lead = f"None of {total} stories entered the call."
+        lead = f"None of {total} stories went into the prediction."
     rest = []
     if totals["watch"]:
-        rest.append(f"{totals['watch']} stayed on watch with no direction.")
+        rest.append(f"{totals['watch']} stayed on watch. No clear up or down.")
     if totals["aside"]:
         rest.append(f"{totals['aside']} were set aside.")
     return lead + (" " + " ".join(rest) if rest else "")
@@ -347,7 +347,7 @@ def _feed_card(row: dict) -> tuple[str, dict[str, int]]:
 def _story_fate(line: str) -> dict:
     title, _, note = line.partition(" — ")
     note = note.strip()
-    if note.startswith("In the call") or note.startswith("Kept,"):
+    if note.startswith("In the call") or note.startswith("In the prediction") or note.startswith("Kept,"):
         fate = "used"
     elif note.startswith("Kept"):
         fate = "watch"
@@ -379,10 +379,10 @@ def _fate_bar(counts: dict[str, int]) -> str:
 def _fate_key(counts: dict[str, int]) -> str:
     if counts["used"]:
         kind = impact_class(counts["points"])
-        call = f"<strong class='{kind}'>{impact_text(counts['points'])}</strong> in the call"
+        call = f"<strong class='{kind}'>{impact_text(counts['points'])}</strong> in the prediction"
         swatch = kind
     else:
-        call = "<strong>0</strong> in the call"
+        call = "<strong>0</strong> in the prediction"
         swatch = "none"
     return (
         "<p class='fate-key'>"
@@ -395,12 +395,12 @@ def _fate_key(counts: dict[str, int]) -> str:
 
 def _used_group(rows: list[dict]) -> str:
     if not rows:
-        return "<div class='fate-group'><h3>In the call</h3><p class='quiet'>Nothing from this feed entered the call.</p></div>"
+        return "<div class='fate-group'><h3>In the prediction</h3><p class='quiet'>Nothing from this feed went into the prediction.</p></div>"
     body = "".join(_used_row(row) for row in rows)
     return (
         "<div class='fate-group'>"
-        "<h3>In the call</h3>"
-        "<p class='fate-deck'>These words had a direction, so the points went into the call.</p>"
+        "<h3>In the prediction</h3>"
+        "<p class='fate-deck'>These stories clearly say up or down, so the points went into the prediction.</p>"
         f"{body}</div>"
     )
 
@@ -412,7 +412,7 @@ def _used_row(row: dict) -> str:
         pill = f"<span class='impact {impact_class(points)}'>{impact_text(points)}</span>"
     why = ""
     if row["note"].startswith("Kept,"):
-        why = "<span class='why'>No proof it cannot move Nifty.</span>"
+        why = "<span class='why'>Kept, because it may move Nifty.</span>"
     title = f"<span class='title'>{escape(row['title'])}{why}</span>"
     return f"<div class='story used'>{title}{pill}</div>"
 
@@ -422,7 +422,7 @@ def _aside_group(rows: list[dict]) -> str:
         return "<div class='fate-group'><h3>Set aside</h3><p class='quiet'>Nothing was set aside.</p></div>"
     body = "".join(
         "<div class='story aside'>"
-        f"<span class='title'>{escape(row['title'])}<span class='why'>{escape(row['note'])}</span></span>"
+        f"<span class='title'>{escape(row['title'])}<span class='why'>{escape(_plain(row['note']))}</span></span>"
         "</div>"
         for row in rows
     )
@@ -442,7 +442,7 @@ def _watch_group(rows: list[dict]) -> str:
     )
     return (
         "<details class='watch-pile'>"
-        f"<summary>{len(rows)} on watch. No proved direction, so no points.</summary>"
+        f"<summary>{len(rows)} on watch. No clear up or down, so no points.</summary>"
         f"{body}</details>"
     )
 
@@ -503,12 +503,12 @@ def _topline(history: list[Ensemble], gift: dict | None, open_call: Ensemble | N
             "<div class='top-card'>"
             "<span>Last close</span>"
             "<div class='top-pair'>"
-            f"<p><b>{_level_text(called)}</b><small>called</small></p>"
+            f"<p><b>{_level_text(called)}</b><small>predicted</small></p>"
             f"<p><b>{_level_text(landed)}</b><small>Nifty was</small></p>"
             f"<p class='{impact_class(diff)}'><b>{impact_text(diff)}</b><small>diff</small></p>"
             "</div></div>"
         )
-        marks.append(("Called", called, "#6b3fa0"))
+        marks.append(("Predicted", called, "#6b3fa0"))
         landed_color = {"plus": "#0c7a3a", "minus": "#c62828", "flat": "#5e584f"}[impact_class(diff)]
         marks.append(("Nifty", landed, landed_color))
     if opened is not None:
@@ -524,7 +524,7 @@ def _topline(history: list[Ensemble], gift: dict | None, open_call: Ensemble | N
         marks.append(("Open", level, "#1d4e89"))
     if gift_bits is not None:
         shown, extra, kind = gift_bits
-        change = f"<small class='{kind}'>{escape(extra)}</small>" if extra else "<small>offshore</small>"
+        change = f"<small class='{kind}'>{escape(extra)}</small>" if extra else "<small>outside India</small>"
         cards.append(
             f"<div class='top-card'>"
             "<span>GIFT Nifty</span>"
@@ -536,7 +536,7 @@ def _topline(history: list[Ensemble], gift: dict | None, open_call: Ensemble | N
             marks.append(("GIFT", float(gift["price"]), "#b86e00"))
     plot = _glance_plot(marks) if len(marks) >= 2 else ""
     return (
-        "<section class='topline' aria-label='Calls at a glance'>"
+        "<section class='topline' aria-label='Predictions at a glance'>"
         f"<div class='top-grid'>{''.join(cards)}</div>"
         f"{plot}</section>"
     )
@@ -592,13 +592,13 @@ def _glance_plot(marks: list[tuple[str, float, str]]) -> str:
     rows = _label_rows(spans)
     height = baseline + 18 + (max(rows) + 1) * 16 + 4
     parts = [
-        f"<svg class='call-plot' viewBox='0 0 {width} {height}' role='img' aria-label='Calls on one scale' "
+        f"<svg class='call-plot' viewBox='0 0 {width} {height}' role='img' aria-label='Predictions on one scale' "
         "style='font-family:ui-sans-serif,sans-serif'>"
         f"<line x1='{pad_x}' y1='{baseline}' x2='{width - pad_x}' y2='{baseline}' stroke='#e4ddd2' stroke-width='4' stroke-linecap='round'/>"
     ]
     by_name = {name: value for name, value, _color in marks}
-    if "Called" in by_name and "Nifty" in by_name:
-        left, right = sorted((sx(by_name["Called"]), sx(by_name["Nifty"])))
+    if "Predicted" in by_name and "Nifty" in by_name:
+        left, right = sorted((sx(by_name["Predicted"]), sx(by_name["Nifty"])))
         color = next(item[2] for item in marks if item[0] == "Nifty")
         parts.append(
             f"<line x1='{left:.1f}' y1='{baseline}' x2='{right:.1f}' y2='{baseline}' stroke='{color}' stroke-width='4' stroke-linecap='round'/>"
@@ -625,9 +625,9 @@ def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: flo
         return ""
     body = "".join(stories)
     return (
-        "<section class='compare' aria-label='Called against Nifty'>"
-        "<h2>Called</h2>"
-        "<p class='deck'>Last close first. Then the call still open.</p>"
+        "<section class='compare' aria-label='Prediction against Nifty'>"
+        "<h2>Prediction</h2>"
+        "<p class='deck'>Last close first. Then the prediction still waiting.</p>"
         f"{body}"
         "</section>"
     )
@@ -646,7 +646,7 @@ def _scored_call(row: Ensemble) -> str:
         f"at {_bold(made_at)} on {_bold(made_on)}. "
         f"It predicted Nifty 50 would be {_bold(_level_text(predicted))} "
         f"at {_bold(due_at)} on {_bold(due_on)}. "
-        f"Nifty 50 was observed at {_bold(_level_text(observed))} then "
+        f"Nifty 50 was {_bold(_level_text(observed))} then "
         f"({_deviation(observed - predicted)})."
     )
 
@@ -659,7 +659,7 @@ def _open_call(row: Ensemble, nifty: float | None) -> str:
     made_at, made_on = _stamp_bits(made)
     due_at, due_on = _stamp_bits(due)
     sentence = (
-        f"The open call was made when Nifty 50 was {_bold(_level_text(anchor))} "
+        f"This prediction was made when Nifty 50 was {_bold(_level_text(anchor))} "
         f"at {_bold(made_at)} on {_bold(made_on)}. "
         f"It predicts Nifty 50 will be {_bold(_level_text(predicted))} "
         f"at {_bold(due_at)} on {_bold(due_on)}."
@@ -668,7 +668,7 @@ def _open_call(row: Ensemble, nifty: float | None) -> str:
         return sentence
     return (
         f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))} "
-        f"({_deviation(nifty - predicted, 'deviation so far')})."
+        f"({_deviation(nifty - predicted, 'off so far')})."
     )
 
 
@@ -682,13 +682,13 @@ def _scored_plot(row: Ensemble) -> str:
 def _open_plot(row: Ensemble, nifty: float | None) -> str:
     anchor = row.nifty_level or 0
     predicted = anchor + row.mu
-    return _call_plot(anchor, predicted, nifty, "Live", "Still open")
+    return _call_plot(anchor, predicted, nifty, "Live", "Still waiting")
 
 
 def _call_plot(anchor: float, predicted: float, seen: float | None, seen_name: str, label: str) -> str:
     marks: list[tuple[str, float, str]] = [
         ("When", anchor, "#746c62"),
-        ("Called", predicted, "#6b3fa0"),
+        ("Predicted", predicted, "#6b3fa0"),
     ]
     if seen is not None:
         marks.append((seen_name, seen, {"plus": "#0c7a3a", "minus": "#c62828", "flat": "#5e584f"}[impact_class(seen - predicted)]))
@@ -771,7 +771,7 @@ def _bold(text: str) -> str:
     return f"<strong>{escape(text)}</strong>"
 
 
-def _deviation(value: float, label: str = "deviation") -> str:
+def _deviation(value: float, label: str = "off by") -> str:
     kind = impact_class(value)
     return f"{label} <strong class='{kind}'>{impact_text(value)}</strong>"
 
@@ -857,8 +857,8 @@ def _matters(events: list[Event]) -> str:
     watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
     return (
         "<div class='matters'>"
-        f"<section><h2>Moving the forecast{_mover_total(moving)}</h2>"
-        "<p class='deck'>Points these stories added to the call. Bigger numbers moved it more.</p>"
+        f"<section><h2>Moving the prediction{_mover_total(moving)}</h2>"
+        "<p class='deck'>Points these stories added to the prediction. Bigger numbers moved it more.</p>"
         f"{move_html}</section>"
         f"<section><h2>Quiet or stuck</h2>"
         "<p class='deck'>Amber is waiting. Red had no answer. Neither is in the number.</p>"
@@ -887,7 +887,7 @@ def _matter_rows(rows: list[tuple[str, str, str, float]]) -> str:
             points = f"<span class='impact {impact_class(impact)}'>{impact_text(impact)}</span>"
         html.append(
             f"<div class='matter {kind}'><span class='name'>{escape(name)}</span>"
-            f"<span class='line'>{escape(sentence)}</span>{points}</div>"
+            f"<span class='line'>{escape(_plain(sentence))}</span>{points}</div>"
         )
     return "\n".join(html)
 
@@ -904,7 +904,7 @@ def _activity(events: list[Event], feeds: list[dict] | None = None) -> str:
         return "<p class='empty'>No checks yet.</p>"
     latest = grouped[order[0]]
     score = next((event for event in latest if event.agent == SCORE_AGENT), None)
-    score_html = f"<p class='score'>{escape(score.sentence)}</p>" if score else ""
+    score_html = f"<p class='score'>{escape(_plain(score.sentence))}</p>" if score else ""
     trail = "\n".join(_trail_line(stamp, grouped[stamp]) for stamp in order[1:9])
     checked = _checked(latest)
     tone = "count" if checked == 8 else "count short"
@@ -912,7 +912,7 @@ def _activity(events: list[Event], feeds: list[dict] | None = None) -> str:
     return (
         "<section class='roster'>"
         f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
-        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how the call was made.</p>"
+        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how the prediction was made.</p>"
         f"{_roster_rows(latest)}{score_html}<p class='how'>{escape(story)}</p>{trail}"
         "</section>"
     )
@@ -934,7 +934,7 @@ _LEARN_COLOR = {
 def _news(families: list[tuple[str, int, float]]) -> str:
     heavier, lighter = news_shifts(families)
     if not heavier and not lighter:
-        body = "<p class='deck wait'>Headline weights start after a scored story.</p>"
+        body = "<p class='deck wait'>Headline weights start after a story is checked.</p>"
     else:
         body = (
             "<div class='news-cols'>"
@@ -945,7 +945,7 @@ def _news(families: list[tuple[str, int, float]]) -> str:
     return (
         "<section class='news' id='news'>"
         "<div class='roster-head'><span>News</span></div>"
-        "<p class='deck'>Heavier means that kind of headline pulls the call harder than when it started. "
+        "<p class='deck'>Heavier means that kind of headline pulls the prediction harder than when it started. "
         "Lighter means those points were cut. The number is the points added or removed.</p>"
         f"{body}</section>"
     )
@@ -982,8 +982,8 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     return (
         "<section class='learn' id='learning'>"
         "<div class='roster-head'><span>Improving</span></div>"
-        "<p class='deck'>The line rises when later scored calls miss by less. The grey line is 50, no change. "
-        "Each card shows that score, then the points added to the next call. Above zero on the card, the agent has been too low.</p>"
+        "<p class='deck'>The line rises when later predictions miss by less. The grey line is 50, no change. "
+        "Each card shows that score, then the points added to the next prediction. Above zero on the card, the agent has been too low.</p>"
         f"{banner}"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
@@ -991,16 +991,16 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
 
 def _gain_kind(score: int) -> tuple[str, str]:
     if score > 50:
-        return "Tighter", "up"
+        return "Better", "up"
     if score < 50:
-        return "Wider", "down"
+        return "Worse", "down"
     return "Same", "flat"
 
 
 def _gain_banner(misses: list[float]) -> str:
     trail = learning_trail(misses, keep=48)
     if not trail:
-        return "<p class='deck wait'>The board line starts after 4 scored calls.</p>"
+        return "<p class='deck wait'>The board line starts after 4 checked predictions.</p>"
     word, kind = _gain_kind(trail[-1])
     return (
         "<div class='gain-banner'>"
@@ -1119,6 +1119,24 @@ def _row_kind(sentence: str) -> str:
     return "ok"
 
 
+def _plain(text: str) -> str:
+    return (
+        text.replace("Scored the session call", "Checked the close prediction")
+        .replace("Scored the open call", "Checked the open prediction")
+        .replace("Scored the week call", "Checked the week prediction")
+        .replace("Scored an open call", "Checked the open prediction")
+        .replace("Missed the mean by", "Off by")
+        .replace("Inside the curve.", "Inside the expected range.")
+        .replace("no call has been scored", "no prediction has been checked")
+        .replace("Calls from this hour cannot be scored.", "This hour’s predictions cannot be checked.")
+        .replace("Its calls stayed biased.", "Its predictions stayed to one side.")
+        .replace("No proof this cannot move Nifty.", "It may still move Nifty.")
+        .replace("Not proved irrelevant.", "It may still move Nifty.")
+        .replace("No proved direction, so no points.", "No clear up or down, so no points.")
+        .replace("Spread ", "Range ")
+    )
+
+
 def _agent_row(name: str, event: Event | None) -> str:
     sentence = event.sentence if event else "No check"
     impact = event.impact if event else 0
@@ -1130,7 +1148,7 @@ def _agent_row(name: str, event: Event | None) -> str:
     return (
         f"<div class='agent {kind}'><span class='dot {kind}'></span>"
         f"<span class='name'>{escape(name)}</span>"
-        f"<span class='line'>{escape(sentence)}</span>{points}</div>"
+        f"<span class='line'>{escape(_plain(sentence))}</span>{points}</div>"
     )
 
 
@@ -1140,7 +1158,7 @@ def _trail_line(stamp: str, events: list[Event]) -> str:
     mean = "—"
     if board is not None and board.sentence not in STATUS_LINES:
         mean = impact_text(board.impact)
-    summary = f"{when} · {_checked(events)} of 8 · mean {mean}"
+    summary = f"{when} · {_checked(events)} of 8 · prediction {mean}"
     return f"<p class='trail'>{escape(summary)}. {escape(_call_story(events))}</p>"
 
 
@@ -1167,9 +1185,9 @@ def _call_story(events: list[Event], feeds: list[dict] | None = None) -> str:
             moved.append(f"{name} reported: {sentence.rstrip('.')}.")
     board = found.get(BOARD_AGENT)
     if board is not None and board.sentence not in STATUS_LINES:
-        parts = [f"The call was {impact_text(board.impact)}."]
+        parts = [f"The prediction was {impact_text(board.impact)}."]
     else:
-        parts = ["No call this hour."]
+        parts = ["No prediction this hour."]
     parts.extend(moved)
     if quiet:
         parts.append(f"{_name_list(quiet)} was quiet." if len(quiet) == 1 else f"{_name_list(quiet)} were quiet.")
@@ -1179,11 +1197,11 @@ def _call_story(events: list[Event], feeds: list[dict] | None = None) -> str:
         parts.append(f"{_name_list(stuck)} had no answer.")
     score = found.get(SCORE_AGENT)
     if score is not None:
-        text = score.sentence.rstrip(".")
+        text = _plain(score.sentence).rstrip(".")
         parts.append(f"{text}.")
     boss = found.get(BOSS_AGENT)
     if boss is not None and not boss.sentence.startswith("Watching"):
-        text = boss.sentence.rstrip(".")
+        text = _plain(boss.sentence).rstrip(".")
         parts.append(f"{text}.")
     news = _feed_story(feeds)
     if news:
@@ -1201,7 +1219,7 @@ def _feed_story(feeds: list[dict] | None) -> str:
             continue
         lines = [str(line) for line in row.get("lines") or [] if str(line)]
         if lines:
-            used = sum("In the call" in line or line.startswith("Kept,") or "Kept," in line for line in lines)
+            used = sum("In the call" in line or "In the prediction" in line or line.startswith("Kept,") or "Kept," in line for line in lines)
             aside = sum("not an event" in line or "cannot" in line or "heavyweights" in line or "cinema" in line or "lifestyle" in line for line in lines)
             bits.append(f"{label} read {len(lines)} stories. {used} kept. {aside} set aside.")
         else:
@@ -1244,7 +1262,7 @@ def _agent_of(event: Event) -> str:
     text = event.sentence
     if text.startswith("Scored"):
         return SCORE_AGENT
-    if text.startswith("Board ready") or text.startswith("Spread "):
+    if text.startswith("Board ready") or text.startswith("Spread ") or text.startswith("Range "):
         return BOARD_AGENT
     if text.startswith("Scout"):
         return "scout"
@@ -1271,7 +1289,7 @@ def _current_chart(
     book_mean, book_sigma = _prediction_book(rows, as_of)
     nxt = _next_level(ensemble, nifty)
     if nxt is None and book_mean is None and nifty is None and gift is None:
-        return _empty_chart("No forecast this hour.")
+        return _empty_chart("No prediction this hour.")
     impact = None if ensemble is None else ensemble.mu
     return _forecast_svg(nifty, gift, nxt, impact, book_mean, book_sigma, _ghost_books(rows))
 
@@ -1382,10 +1400,10 @@ def _forecast_svg(
     if nxt is not None:
         markers.append(("Next", nxt, "#1d4e89"))
     if book_mean is not None:
-        markers.append(("Mean", book_mean, "#6b3fa0"))
+        markers.append(("Average", book_mean, "#6b3fa0"))
 
     parts = [
-        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Forecast' "
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Prediction' "
         "style='font-family:ui-sans-serif,sans-serif'>"
     ]
     for step in range(1, 4):
@@ -1430,11 +1448,11 @@ def _forecast_svg(
             bell(mean, spread, fade)
     else:
         parts.append(
-            f"<text x='{pad}' y='{baseline - 16}' fill='#746c62' font-size='12'>Bell starts after two predictions.</text>"
+            f"<text x='{pad}' y='{baseline - 16}' fill='#746c62' font-size='12'>The band starts after two predictions.</text>"
         )
     for name, value, color in markers:
         x = sx(value)
-        dash = " stroke-dasharray='3 3'" if name == "Mean" else ""
+        dash = " stroke-dasharray='3 3'" if name == "Average" else ""
         parts.append(
             f"<line x1='{x:.1f}' y1='{baseline - 8}' x2='{x:.1f}' y2='{baseline + 5}' stroke='{color}' stroke-width='2'{dash}/>"
         )
@@ -1513,9 +1531,9 @@ def _error_readout(rows: list[Ensemble]) -> str:
 def _bias_phrase(mean: float) -> str:
     points = abs(int(round(mean)))
     if points == 0:
-        return "On average the call matched Nifty."
+        return "On average the prediction matched Nifty."
     side = "above" if mean < 0 else "below"
-    return f"On average the call sat {points} points {side} Nifty."
+    return f"On average the prediction sat {points} points {side} Nifty."
 
 
 def _trend_phrase(values: list[float]) -> str:
@@ -1525,15 +1543,15 @@ def _trend_phrase(values: list[float]) -> str:
     early = sum(values[:cut]) / cut
     late = sum(values[-cut:]) / cut
     if abs(late) + 20 < abs(early):
-        text = "Later calls miss by less."
+        text = "Later predictions miss by less."
     elif abs(late) > abs(early) + 20:
-        text = "Later calls miss by more."
+        text = "Later predictions miss by more."
     else:
-        text = "Later calls miss by about the same."
+        text = "Later predictions miss by about the same."
     if early <= -10 and late >= 10:
-        return "Later calls now finish above Nifty."
+        return "Later predictions now finish above Nifty."
     if early >= 10 and late <= -10:
-        return "Later calls now finish below Nifty."
+        return "Later predictions now finish below Nifty."
     return text
 
 
@@ -1549,7 +1567,7 @@ def _same_close_note(rows: list[Ensemble]) -> str:
     count = levels.count(top)
     if count < 3 or count * 2 <= len(rows):
         return ""
-    return f"{count} of these calls were checked against one close, {_level_text(top)}."
+    return f"{count} of these predictions were checked against one close, {_level_text(top)}."
 
 
 def _miss_ticks(lo: float, hi: float) -> list[float]:
@@ -1587,7 +1605,7 @@ def _miss_tip(row: Ensemble) -> str:
         return f"{when}{kind}. Miss {miss}."
     call = row.nifty_level + row.mu
     done = row.nifty_level + row.actual
-    return f"{when}{kind}. Call {_level_text(call)}. Nifty {_level_text(done)}. Miss {miss}."
+    return f"{when}{kind}. Predicted {_level_text(call)}. Nifty {_level_text(done)}. Miss {miss}."
 
 
 def _error_svg(rows: list[Ensemble]) -> str:

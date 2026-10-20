@@ -88,7 +88,7 @@ def judge_headline(title: str) -> dict:
     reason = _no_nifty_value(title)
     if reason:
         return {"verdict": "discard", "guess": None, "reason": reason}
-    return {"verdict": "keep", "guess": watch_move(title), "reason": "No proof this cannot move Nifty."}
+    return {"verdict": "keep", "guess": watch_move(title), "reason": "It may still move Nifty."}
 
 
 def watch_move(title: str) -> dict | None:

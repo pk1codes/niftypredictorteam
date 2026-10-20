@@ -107,7 +107,7 @@ def apply_score(source: Source, residual: float, book_std: float) -> str | None:
     if source.n_scored >= 30 and book_std > 0 and abs(mean) > 1.5 * book_std:
         source.status = "retired"
         source.weight = 0
-        return f"{source.id} retired. Its calls stayed biased."
+        return f"{source.id} retired. Its predictions stayed to one side."
     return None
 
 
