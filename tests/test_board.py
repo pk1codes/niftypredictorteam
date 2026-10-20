@@ -668,8 +668,50 @@ def test_learning_row_shows_the_next_shift():
     claim.ts = now.isoformat()
     page = render_page(None, [], [], 25000, 4, claims=[claim])
     assert "Not enough scores" in page
+    assert "The board line starts after 4 scored calls." in page
     row = page.split(">World<", 1)[1].split("</div>", 1)[0]
     assert "+2" in row
+
+
+def _scored_rows(misses: list[float], beat: str = "global"):
+    now = datetime(2026, 10, 18, 15, tzinfo=IST)
+    claims = []
+    history = []
+    for index, miss in enumerate(misses):
+        stamp = (now - timedelta(hours=len(misses) - index)).isoformat()
+        claim = _claim("Crude jumps", f"https://example.com/{index}", "world:crude:down", -65)
+        claim.beat = beat
+        claim.residual = miss
+        claim.ts = stamp
+        claims.append(claim)
+        history.append(Ensemble(id=str(index), ts=stamp, mu=0, sigma=10, n_shocks=1, nifty_level=25000, residual=miss))
+    return claims, history
+
+
+def test_improving_rises_when_later_misses_shrink():
+    misses = [20, 20, 20, 20, 4, 4, 4, 4]
+    claims, history = _scored_rows(misses)
+    page = render_page(None, [], [], 25000, 8, history=history, claims=claims)
+    score = learning_score(misses)
+    assert score > 50
+    assert f"class='gain up'>{score}" in page
+    assert "Tighter" in page
+    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
+    assert "stroke='#0c7a3a'" in line
+    row = page.split(">World<", 1)[1].split("</svg>", 1)[0]
+    assert f"class='gain up'>{score}" in row
+
+
+def test_improving_falls_when_later_misses_grow():
+    misses = [4, 4, 4, 4, 20, 20, 20, 20]
+    _claims, history = _scored_rows(misses, beat="flows")
+    page = render_page(None, [], [], 25000, 8, history=history)
+    score = learning_score(misses)
+    assert score < 50
+    assert f"class='gain down'>{score}" in page
+    assert "Wider" in page
+    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
+    assert "stroke='#c62828'" in line
 
 
 def test_pulse_and_tijori_join_the_agent_feeds():

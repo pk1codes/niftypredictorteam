@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
 from niftyteam.horizons import session_close
-from niftyteam.learn import agent_misses, shift_trail
+from niftyteam.learn import agent_misses, learning_score, learning_trail, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
 
@@ -127,8 +127,15 @@ def render_page(
   .matter .minus, .agent .minus, .off .minus {{ background: #fdeceb; }}
   .empty {{ margin: 0; padding: 16px; color: #746c62; background: #fff; border: 1px solid #e4ddd2; border-radius: 12px; }}
   .learn-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 14px 8px; }}
-  .learn-card {{ display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 8px; border: 1px solid #efeae2; border-radius: 10px; padding: 8px 10px 6px; }}
-  .learn-plot {{ grid-column: 1 / -1; width: 100%; height: auto; }}
+  .learn-card {{ display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: 2px 8px; border: 1px solid #efeae2; border-radius: 10px; padding: 8px 10px 6px; }}
+  .learn-plot, .gain-plot {{ grid-column: 1 / -1; width: 100%; height: auto; }}
+  .gain-banner {{ padding: 0 14px 10px; }}
+  .gain-read {{ margin: 0 0 2px; color: #3f3a34; font: 600 15px/1 ui-sans-serif, sans-serif; }}
+  .gain-read strong {{ font-size: 28px; margin-right: 6px; letter-spacing: 0; }}
+  .gain {{ font-weight: 650; font-variant-numeric: tabular-nums; }}
+  .gain.up {{ color: #0c7a3a; }}
+  .gain.down {{ color: #c62828; }}
+  .gain.flat {{ color: #5e584f; }}
   .learn .line.up {{ color: #0c7a3a; font-weight: 650; }}
   .learn .line.down {{ color: #c62828; font-weight: 650; }}
   .learn .wait {{ padding: 2px 14px 14px; margin: 0; }}
@@ -516,12 +523,43 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     wait = ""
     if waiting:
         wait = f"<p class='deck wait'>Not enough scores for {escape(', '.join(waiting))}.</p>"
+    banner = _gain_banner(series.get(BOARD_AGENT) or [])
     return (
-        "<section class='learn' id='learning'><div class='roster-head'><span>Learning</span></div>"
-        "<p class='deck'>Each line is the points added to the next call after every scored miss. "
-        "The centre line is zero. Above it, the agent has been too low. Shared for the next hour.</p>"
+        "<section class='learn' id='learning'>"
+        "<div class='roster-head'><span>Improving</span></div>"
+        "<p class='deck'>The line rises when later scored calls miss by less. The grey line is 50, no change. "
+        "Each card shows that score, then the points added to the next call. Above zero on the card, the agent has been too low.</p>"
+        f"{banner}"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
+
+
+def _gain_kind(score: int) -> tuple[str, str]:
+    if score > 50:
+        return "Tighter", "up"
+    if score < 50:
+        return "Wider", "down"
+    return "Same", "flat"
+
+
+def _gain_banner(misses: list[float]) -> str:
+    trail = learning_trail(misses, keep=48)
+    if not trail:
+        return "<p class='deck wait'>The board line starts after 4 scored calls.</p>"
+    word, kind = _gain_kind(trail[-1])
+    return (
+        "<div class='gain-banner'>"
+        f"<p class='gain-read'><strong class='gain {kind}'>{trail[-1]}</strong> {word}</p>"
+        f"{_gain_plot(trail)}</div>"
+    )
+
+
+def _gain_mark(misses: list[float]) -> str:
+    score = learning_score(misses)
+    if score is None:
+        return "<span class='gain'></span>"
+    _word, kind = _gain_kind(score)
+    return f"<span class='gain {kind}'>{score}</span>"
 
 
 def _learn_row(name: str, misses: list[float]) -> str:
@@ -533,8 +571,48 @@ def _learn_row(name: str, misses: list[float]) -> str:
     color = _LEARN_COLOR.get(name, "#4a453e")
     return (
         f"<div class='learn-card'><span class='name'>{escape(name)}</span>"
+        f"{_gain_mark(misses)}"
         f"<span class='line {kind}'>{impact_text(shift)}</span>"
         f"{_learn_plot(trail, color)}</div>"
+    )
+
+
+def _gain_scale(scores: list[int]) -> tuple[float, float]:
+    lo = min(50.0, float(min(scores)))
+    hi = max(50.0, float(max(scores)))
+    if hi - lo < 20:
+        mid = (lo + hi) / 2
+        lo = min(lo, mid - 10)
+        hi = max(hi, mid + 10)
+    pad = (hi - lo) * 0.08
+    return lo - pad, hi + pad
+
+
+def _gain_plot(scores: list[int]) -> str:
+    width, height = 640, 96
+    pad_x, pad_y = 12, 14
+    lo, hi = _gain_scale(scores)
+    latest = scores[-1]
+    color = "#0c7a3a" if latest > 50 else "#c62828" if latest < 50 else "#746c62"
+
+    def sx(index: int) -> float:
+        last = max(len(scores) - 1, 1)
+        return pad_x + (width - 2 * pad_x) * index / last
+
+    def sy(value: float) -> float:
+        return pad_y + (1 - (value - lo) / (hi - lo)) * (height - 2 * pad_y)
+
+    mid = sy(50)
+    pts = [f"{sx(index):.1f},{sy(value):.1f}" for index, value in enumerate(scores)]
+    end_x, end_y = sx(len(scores) - 1), sy(scores[-1])
+    area = f"{sx(0):.1f},{mid:.1f} " + " ".join(pts) + f" {end_x:.1f},{mid:.1f}"
+    return (
+        f"<svg class='gain-plot' viewBox='0 0 {width} {height}' role='img' aria-label='Improving'>"
+        f"<line x1='{pad_x}' y1='{mid:.1f}' x2='{width - pad_x}' y2='{mid:.1f}' stroke='#e4ddd2'/>"
+        f"<polygon points='{area}' fill='{color}' fill-opacity='0.14'/>"
+        f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{' '.join(pts)}'/>"
+        f"<circle cx='{end_x:.1f}' cy='{end_y:.1f}' r='3.5' fill='{color}'/>"
+        f"</svg>"
     )
 
 
