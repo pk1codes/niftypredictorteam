@@ -1031,6 +1031,7 @@ def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict |
         store.scored_claims(),
         ahead_view(store),
         important_view(store),
+        store.families(),
     )
     path = root / "data" / "chart.html"
     path.parent.mkdir(parents=True, exist_ok=True)

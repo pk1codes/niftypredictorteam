@@ -58,6 +58,7 @@ def main() -> None:
                 store.scored_claims(),
                 ahead_view(store),
                 important_view(store),
+                store.families(),
             )
             path = root / "data" / "chart.html"
             path.write_text(html)

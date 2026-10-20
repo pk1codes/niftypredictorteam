@@ -358,15 +358,83 @@ def family_key(shock_key: str) -> str | None:
     return None
 
 
+def family_bias(n: int, residual_sum: float) -> float:
+    """Points added to the next headline of this kind. Capped at 30."""
+    if n <= 0:
+        return 0.0
+    bias = (residual_sum / n) * (n / (n + 4))
+    return max(-30.0, min(30.0, bias))
+
+
+_NEWS = {
+    "world:global:down": ("War and sanctions", -1),
+    "world:crude:down": ("Oil and war", -1),
+    "policy:down": ("RBI tightening", -1),
+    "policy:up": ("RBI easing", 1),
+    "crude:up": ("Oil easing", 1),
+    "crude:down": ("Oil rising", -1),
+    "fx:up": ("Rupee gains", 1),
+    "fx:down": ("Rupee slip", -1),
+    "flows:down": ("Foreign selling", -1),
+    "flows:up": ("Foreign buying", 1),
+    "fii:up": ("FII buying", 1),
+    "fii:down": ("FII selling", -1),
+    "dii:up": ("DII buying", 1),
+    "dii:down": ("DII selling", -1),
+    "global:up": ("Overseas rally", 1),
+    "global:down": ("Overseas slide", -1),
+    "calamity:earthquake": ("Earthquake", -1),
+    "calamity:cyclone": ("Cyclone", -1),
+    "calamity:flood": ("Flood", -1),
+    "calamity:monsoon": ("Weak monsoon", -1),
+}
+
+
+def story_news(key: str) -> tuple[str, int] | None:
+    found = _NEWS.get(key)
+    if found is not None:
+        return found
+    parts = key.split(":")
+    if len(parts) == 3 and parts[0] == "weights" and parts[2] in {"up", "down"}:
+        verb = "rises" if parts[2] == "up" else "falls"
+        return f"{parts[1]} {verb}", 1 if parts[2] == "up" else -1
+    if key.startswith("find:") and key.count(":") == 1:
+        name = key.split(":", 1)[1]
+        if name:
+            return f"{name} find", 1
+    return None
+
+
+def news_shifts(rows: list[tuple[str, int, float]]) -> tuple[list[dict], list[dict]]:
+    """Split scored headlines into those pulling harder and those cut back."""
+    heavier: list[dict] = []
+    lighter: list[dict] = []
+    for key, n, residual_sum in rows:
+        story = story_news(key)
+        if story is None or n <= 0:
+            continue
+        label, sign = story
+        bias = family_bias(n, residual_sum)
+        points = round(abs(bias))
+        if points < 1:
+            continue
+        item = {"label": label, "points": points}
+        if sign * bias > 0:
+            heavier.append(item)
+        else:
+            lighter.append(item)
+    heavier.sort(key=lambda item: (-item["points"], item["label"]))
+    lighter.sort(key=lambda item: (-item["points"], item["label"]))
+    return heavier, lighter
+
+
 def apply_family_bias(guess: dict, n: int, residual_sum: float) -> dict:
     shifted = dict(guess)
     if n < 5:
         shifted["points_high"] = round(float(shifted["points_high"]) * 1.4, 1)
         shifted["confidence"] = min(float(shifted["confidence"]), 0.25)
     if n > 0:
-        bias = (residual_sum / n) * (n / (n + 4))
-        bias = max(-30.0, min(30.0, bias))
-        shifted["midpoint"] = round(float(shifted["midpoint"]) + bias, 1)
+        shifted["midpoint"] = round(float(shifted["midpoint"]) + family_bias(n, residual_sum), 1)
     return shifted
 
 

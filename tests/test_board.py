@@ -7,7 +7,7 @@ from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, wake, 
 from niftyteam.chart import _mover_total, render_page
 from niftyteam.config import impact_class, load_config
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
-from niftyteam.estimate import apply_family_bias, estimate_headline, fit_move, fitted_move, gift_gap_estimate, headline_kind, judge_headline, level_estimate, oi_change_estimate, pcr_estimate, promoted_miss
+from niftyteam.estimate import apply_family_bias, estimate_headline, family_bias, fit_move, fitted_move, gift_gap_estimate, headline_kind, judge_headline, level_estimate, news_shifts, oi_change_estimate, pcr_estimate, promoted_miss
 from niftyteam.learn import call_shift, learning_score, learning_trail
 from niftyteam.horizons import forecast_move, next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
@@ -213,11 +213,24 @@ def test_called_level_sits_beside_the_live_nifty():
     assert "Live Nifty 50 is" in card
     assert "24,910" in card
     assert "deviation so far <strong class='minus'>-5</strong>" in card
+    assert "aria-label='Last close'" in card
+    assert "aria-label='Still open'" in card
+    assert "When 24,800" in card
+    assert "Called 24,840" in card
+    assert "Seen 24,810" in card
+    assert "When 24,900" in card
+    assert "Called 24,915" in card
+    assert "Live 24,910" in card
+    assert "stroke='#c62828'" in card
     pending = render_page(call, [], [], None, 0)
     assert "will be" in pending
     assert "24,915" in pending
     assert "Live Nifty 50 is" not in pending
     assert "observed at" not in pending
+    open_plot = pending.split("aria-label='Still open'", 1)[1].split("</svg>", 1)[0]
+    assert "When 24,900" in open_plot
+    assert "Called 24,915" in open_plot
+    assert "Live " not in open_plot
     blank = render_page(None, [], [], 24810, 0)
     assert "Prediction was made" not in blank
 
@@ -271,6 +284,26 @@ def test_family_bias_shifts_the_next_claim():
     guess = {"midpoint": -40, "points_high": 60, "confidence": 0.4, "shock_key": "world:crude:down"}
     shifted = apply_family_bias(guess, 4, 40)
     assert shifted["midpoint"] == pytest.approx(-35)
+    assert family_bias(4, 40) == pytest.approx(5)
+
+
+def test_news_shifts_split_heavier_from_lighter():
+    heavier, lighter = news_shifts([
+        ("world:global:down", 3, -600),
+        ("crude:up", 10, -2000),
+        ("calamity:earthquake", 1, 55),
+        ("level:brent", 4, -200),
+        ("fx:up", 1, 0),
+    ])
+    assert heavier[0] == {"label": "War and sanctions", "points": 30}
+    assert {"label": "Oil easing", "points": 30} in lighter
+    assert {"label": "Earthquake", "points": 11} in lighter
+    assert all(row["label"] != "Brent" for row in heavier + lighter)
+    page = render_page(None, [], [], 25000, 8, families=[("policy:down", 2, -400), ("crude:up", 10, -2000)])
+    block = page.split("id='news'", 1)[1].split("</section>", 1)[0]
+    assert "RBI tightening" in block.split(">Lighter<", 1)[0]
+    assert "Oil easing" in block.split(">Lighter<", 1)[1]
+    assert "Headline weights start after a scored story." in render_page(None, [], [], None, 0)
 
 
 def test_error_is_split_and_reused():

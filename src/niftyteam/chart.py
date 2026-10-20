@@ -6,6 +6,7 @@ from html import escape
 from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
+from niftyteam.estimate import news_shifts
 from niftyteam.horizons import session_close
 from niftyteam.learn import agent_misses, learning_score, learning_trail, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
@@ -27,16 +28,18 @@ def render_page(
     claims: list[Claim] | None = None,
     ahead: dict | None = None,
     feeds: list[dict] | None = None,
+    families: list[tuple[str, int, float]] | None = None,
 ) -> str:
     gift_price = None if gift is None else gift.get("price")
     current = _current_chart(ensemble, nifty, gift_price, history, last_run)
-    errors = _error_chart(residuals)
+    errors = _error_chart(residuals, history or [])
     log = _activity(events, feeds)
     learning = _learning(claims or [], history or [])
+    news = _news(families or [])
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
     early = ""
     if scored < 30:
-        early = f"<p class='note'>Early curve. {scored} scored forecasts. The error bell settles after a few dozen checks, so read it as a sketch.</p>"
+        early = f"<p class='note'>Early path. {scored} scored forecasts. It settles after a few dozen checks, so read it as a sketch.</p>"
     status = _status(last_run)
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Offshore Nifty. Plus leans the next open up.")
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
@@ -76,7 +79,9 @@ def render_page(
   .note {{ margin: 0 0 16px; padding: 10px 12px; background: #f7f3fb; border: 1px solid #e4d8f2; border-radius: 10px; color: #5c4d73; font: 14px/1.4 ui-sans-serif, sans-serif; }}
   figure {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 8px 8px 0; box-shadow: inset 0 3px 0 #6b3fa0; }}
   figure.errors {{ box-shadow: inset 0 3px 0 #c4b8a8; }}
-  figure.errors svg {{ max-height: 260px; }}
+  figure.errors svg {{ max-height: 420px; }}
+  .error-read {{ margin: 8px 10px 0; color: #1c1915; font: 600 15px/1.35 ui-sans-serif, sans-serif; }}
+  .error-note {{ margin: 2px 10px 0; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
   figcaption {{ font: 13px/1.45 ui-sans-serif, sans-serif; color: #5e584f; padding: 6px 8px 12px; }}
   .mark-spot {{ color: #0c7a3a; font-weight: 650; }}
   .mark-gift {{ color: #b86e00; font-weight: 650; }}
@@ -145,7 +150,16 @@ def render_page(
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
   .compare .story {{ margin: 8px 0 0; color: #1c1915; font: 16px/1.5 ui-sans-serif, sans-serif; }}
   .compare .story strong {{ font-variant-numeric: tabular-nums; }}
-  .learn {{ margin-top: 16px; }}
+  .compare .call-plot {{ margin: 2px 0 8px; }}
+  .learn, .news {{ margin-top: 16px; }}
+  .news {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; overflow: hidden; box-shadow: inset 3px 0 0 #1d4e89; }}
+  .news-cols {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 14px 14px; }}
+  .news h2 {{ margin: 0 0 4px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #746c62; }}
+  .news-row {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid #f0ebe3; }}
+  .news-row .name {{ width: auto; flex: 1; }}
+  .news .pts {{ flex: none; font: 600 16px/1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; color: #1c1915; }}
+  .news-col.lighter .pts {{ color: #8a5a00; }}
+  .news .quiet {{ margin: 0; color: #746c62; font: 14px/1.4 ui-sans-serif, sans-serif; }}
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 16px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
@@ -161,7 +175,7 @@ def render_page(
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .stats, .feed-row, .learn-grid {{ grid-template-columns: 1fr; }}
+    .split, .matters, .desk, .stats, .feed-row, .learn-grid, .news-cols {{ grid-template-columns: 1fr; }}
     .compare .story {{ font-size: 15px; }}
   }}
 </style>
@@ -185,8 +199,9 @@ def render_page(
   <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   {split}
   {_matters(events)}
-  <figure class="errors">{errors}<figcaption>Each past call against what Nifty did. The dashed line is the average miss. The curve appears once scores exist.</figcaption></figure>
+  <figure class="errors">{errors}<figcaption>Each dot is one past call, oldest on the left. Below zero, the call was too high. The dashed line is the average miss. The curve is the recent path, and it appears once three scores exist.</figcaption></figure>
   {log}
+  {news}
   {learning}
 </main>
 <script>
@@ -287,9 +302,9 @@ def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: flo
     finished, forward = _settled_calls(ensemble, history)
     stories = []
     if finished is not None and finished.nifty_level is not None and finished.actual is not None:
-        stories.append(f"<p class='story'>{_scored_call(finished)}</p>")
+        stories.append(f"<p class='story'>{_scored_call(finished)}</p>{_scored_plot(finished)}")
     if forward is not None and forward.nifty_level is not None:
-        stories.append(f"<p class='story'>{_open_call(forward, nifty)}</p>")
+        stories.append(f"<p class='story'>{_open_call(forward, nifty)}</p>{_open_plot(forward, nifty)}")
     if not stories:
         return ""
     body = "".join(stories)
@@ -339,6 +354,97 @@ def _open_call(row: Ensemble, nifty: float | None) -> str:
         f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))} "
         f"({_deviation(nifty - predicted, 'deviation so far')})."
     )
+
+
+def _scored_plot(row: Ensemble) -> str:
+    anchor = row.nifty_level or 0
+    predicted = anchor + row.mu
+    observed = anchor + (row.actual or 0)
+    return _call_plot(anchor, predicted, observed, "Seen", "Last close")
+
+
+def _open_plot(row: Ensemble, nifty: float | None) -> str:
+    anchor = row.nifty_level or 0
+    predicted = anchor + row.mu
+    return _call_plot(anchor, predicted, nifty, "Live", "Still open")
+
+
+def _call_plot(anchor: float, predicted: float, seen: float | None, seen_name: str, label: str) -> str:
+    marks: list[tuple[str, float, str]] = [
+        ("When", anchor, "#746c62"),
+        ("Called", predicted, "#6b3fa0"),
+    ]
+    if seen is not None:
+        marks.append((seen_name, seen, {"plus": "#0c7a3a", "minus": "#c62828", "flat": "#5e584f"}[impact_class(seen - predicted)]))
+    lo, hi = _call_bounds([value for _name, value, _color in marks])
+    width, pad_x, baseline = 640, 18, 22
+    span = hi - lo or 1
+
+    def sx(value: float) -> float:
+        return pad_x + (value - lo) / span * (width - 2 * pad_x)
+
+    placed = [(name, sx(value), color, f"{name} {_level_text(value)}") for name, value, color in marks]
+    spans = [_label_span(x, text, width) for _name, x, _color, text in placed]
+    rows = _label_rows(spans)
+    height = baseline + 16 + (max(rows) + 1) * 16 + 6
+    parts = [
+        f"<svg class='call-plot' viewBox='0 0 {width} {height}' role='img' aria-label='{escape(label)}' "
+        "style='font-family:ui-sans-serif,sans-serif'>"
+        f"<line x1='{pad_x}' y1='{baseline}' x2='{width - pad_x}' y2='{baseline}' stroke='#e4ddd2'/>"
+    ]
+    if seen is not None:
+        left, right = sorted((sx(predicted), sx(seen)))
+        parts.append(
+            f"<line x1='{left:.1f}' y1='{baseline - 8}' x2='{right:.1f}' y2='{baseline - 8}' "
+            f"stroke='{marks[-1][2]}' stroke-width='1.5' stroke-dasharray='3 3'/>"
+        )
+    same = [x for _name, x, _color, _text in placed]
+    for name, x, color, _text in placed:
+        if name == "When" and sum(abs(x - other) < 1 for other in same) > 1:
+            parts.append(f"<circle cx='{x:.1f}' cy='{baseline}' r='7' fill='none' stroke='{color}' stroke-width='2'/>")
+        else:
+            parts.append(f"<circle cx='{x:.1f}' cy='{baseline}' r='4' fill='{color}'/>")
+    for (_name, _x, _color, text), (lx, anchor_name, _left, _right), row in zip(placed, spans, rows):
+        y = baseline + 16 + row * 16
+        parts.append(
+            f"<text x='{lx:.1f}' y='{y}' text-anchor='{anchor_name}' font-size='11' fill='#1c1915'>{escape(text)}</text>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _call_bounds(values: list[float]) -> tuple[float, float]:
+    lo, hi = min(values), max(values)
+    if hi - lo < 12:
+        mid = (lo + hi) / 2
+        lo, hi = mid - 6, mid + 6
+    pad = (hi - lo) * 0.12
+    return lo - pad, hi + pad
+
+
+def _label_span(x: float, text: str, width: int) -> tuple[float, str, float, float]:
+    half = len(text) * 3.3
+    if x - half < 4:
+        return 4, "start", 4, 4 + half * 2
+    if x + half > width - 4:
+        right = width - 4
+        return right, "end", right - half * 2, right
+    return x, "middle", x - half, x + half
+
+
+def _label_rows(spans: list[tuple[float, str, float, float]]) -> list[int]:
+    rows: list[list[tuple[float, float]]] = []
+    assigned = [0] * len(spans)
+    for index in sorted(range(len(spans)), key=lambda item: spans[item][2]):
+        left, right = spans[index][2], spans[index][3]
+        row = 0
+        while row < len(rows) and any(right >= taken_left - 8 and left <= taken_right + 8 for taken_left, taken_right in rows[row]):
+            row += 1
+        if row == len(rows):
+            rows.append([])
+        rows[row].append((left, right))
+        assigned[index] = row
+    return assigned
 
 
 def _stamp_bits(stamp: datetime) -> tuple[str, str]:
@@ -507,6 +613,39 @@ _LEARN_COLOR = {
     "Options": "#5c6b7a",
     "Scout": "#3a6ea5",
 }
+
+
+def _news(families: list[tuple[str, int, float]]) -> str:
+    heavier, lighter = news_shifts(families)
+    if not heavier and not lighter:
+        body = "<p class='deck wait'>Headline weights start after a scored story.</p>"
+    else:
+        body = (
+            "<div class='news-cols'>"
+            f"{_news_col('Heavier', heavier)}"
+            f"{_news_col('Lighter', lighter)}"
+            "</div>"
+        )
+    return (
+        "<section class='news' id='news'>"
+        "<div class='roster-head'><span>News</span></div>"
+        "<p class='deck'>Heavier means that kind of headline pulls the call harder than when it started. "
+        "Lighter means those points were cut. The number is the points added or removed.</p>"
+        f"{body}</section>"
+    )
+
+
+def _news_col(title: str, rows: list[dict]) -> str:
+    kind = "heavier" if title == "Heavier" else "lighter"
+    if not rows:
+        lines = "<p class='quiet'>None yet.</p>"
+    else:
+        lines = "".join(
+            f"<div class='news-row'><span class='name'>{escape(row['label'])}</span>"
+            f"<span class='pts'>{row['points']}</span></div>"
+            for row in rows
+        )
+    return f"<div class='news-col {kind}'><h2>{title}</h2>{lines}</div>"
 
 
 def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
@@ -1011,46 +1150,224 @@ def _axis_labels(parts: list[str], lo: float, hi: float, sx, y: float, width: in
         placed = x
 
 
-def _error_chart(residuals: list[tuple[float, float]]) -> str:
+def _error_chart(residuals: list[tuple[float, float]], history: list[Ensemble] | None = None) -> str:
+    rows = _scored_for_chart(residuals, history or [])
+    if len(rows) < 2:
+        return "<svg viewBox='0 0 400 160'><text x='20' y='80' fill='#746c62'>No error curve yet.</text></svg>"
+    return _error_readout(rows) + _error_svg(rows)
+
+
+def _scored_for_chart(residuals: list[tuple[float, float]], history: list[Ensemble]) -> list[Ensemble]:
+    scored = [row for row in history if row.residual is not None]
+    scored.sort(key=lambda row: (row.ts, row.id))
+    if len(scored) >= 2:
+        return scored
     if len(residuals) < 2:
-        return "<svg viewBox='0 0 400 220'><text x='20' y='110' fill='#746c62'>No error curve yet.</text></svg>"
-    errors = [item[0] for item in residuals]
-    mean = sum(errors) / len(errors)
-    var = sum((item - mean) ** 2 for item in errors) / len(errors)
-    sigma = math.sqrt(var) or 1
-    return _bell_svg(mean, sigma, None, "Errors", bars=errors)
+        return scored
+    return [
+        Ensemble(
+            id=str(index),
+            ts="",
+            mu=0.0,
+            sigma=sigma,
+            n_shocks=0,
+            nifty_level=None,
+            actual=None,
+            residual=residual,
+        )
+        for index, (residual, sigma) in enumerate(residuals)
+    ]
 
 
-def _bell_svg(mu: float, sigma: float, actual: float | None, label: str, bars: list[float] | None = None) -> str:
-    width, height, pad = 400, 220, 28
-    lo, hi = mu - 3.2 * sigma, mu + 3.2 * sigma
+def _error_readout(rows: list[Ensemble]) -> str:
+    values = [float(row.residual or 0) for row in rows]
+    mean = sum(values) / len(values)
+    latest = values[-1]
+    note = _same_close_note(rows)
+    note_html = f"<p class='error-note'>{escape(note)}</p>" if note else ""
+    return (
+        "<p class='error-read'>"
+        f"Average miss <strong class='{impact_class(mean)}'>{impact_text(mean)}</strong>. "
+        f"{escape(_bias_phrase(mean))} {escape(_trend_phrase(values))}"
+        f" Latest <strong class='{impact_class(latest)}'>{impact_text(latest)}</strong>."
+        f"</p>{note_html}"
+    )
+
+
+def _bias_phrase(mean: float) -> str:
+    points = abs(int(round(mean)))
+    if points == 0:
+        return "On average the call matched Nifty."
+    side = "above" if mean < 0 else "below"
+    return f"On average the call sat {points} points {side} Nifty."
+
+
+def _trend_phrase(values: list[float]) -> str:
+    if len(values) < 4:
+        return ""
+    cut = max(len(values) // 3, 1)
+    early = sum(values[:cut]) / cut
+    late = sum(values[-cut:]) / cut
+    if abs(late) + 20 < abs(early):
+        text = "Later calls miss by less."
+    elif abs(late) > abs(early) + 20:
+        text = "Later calls miss by more."
+    else:
+        text = "Later calls miss by about the same."
+    if early <= -10 and late >= 10:
+        return "Later calls now finish above Nifty."
+    if early >= 10 and late <= -10:
+        return "Later calls now finish below Nifty."
+    return text
+
+
+def _same_close_note(rows: list[Ensemble]) -> str:
+    levels = []
+    for row in rows:
+        if row.nifty_level is None or row.actual is None:
+            continue
+        levels.append(round(row.nifty_level + row.actual))
+    if not levels:
+        return ""
+    top = max(set(levels), key=levels.count)
+    count = levels.count(top)
+    if count < 3 or count * 2 <= len(rows):
+        return ""
+    return f"{count} of these calls were checked against one close, {_level_text(top)}."
+
+
+def _miss_ticks(lo: float, hi: float) -> list[float]:
     span = hi - lo or 1
-    peak = 1 / (sigma * math.sqrt(2 * math.pi))
+    step = 50 if span <= 280 else 100 if span <= 700 else 200
+    start = math.ceil((lo - 1e-6) / step) * step
+    ticks = []
+    value = start
+    while value <= hi + 1e-6:
+        ticks.append(float(value))
+        value += step
+    if lo < 0 < hi and not any(abs(tick) < 1e-6 for tick in ticks):
+        ticks.append(0.0)
+        ticks.sort()
+    return ticks
 
-    def sx(x: float) -> float:
-        return pad + (x - lo) / span * (width - 2 * pad)
 
-    def sy(y: float) -> float:
-        return 16 + (1 - y / peak) * (height - 56)
+def _smooth_path(values: list[float]) -> list[float]:
+    if len(values) < 3:
+        return []
+    path = []
+    for index in range(len(values)):
+        chunk = values[max(0, index - 1): index + 2]
+        path.append(sum(chunk) / len(chunk))
+    return path
 
-    pts = []
-    for i in range(81):
-        x = lo + span * i / 80
-        y = math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * math.sqrt(2 * math.pi))
-        pts.append(f"{sx(x):.1f},{sy(y):.1f}")
-    parts = [f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='{escape(label)}'>"]
-    parts.append("<line x1='28' y1='188' x2='372' y2='188' stroke='#e4ddd2'/>")
-    if bars:
-        for value in bars:
-            if lo <= value <= hi:
-                parts.append(
-                    f"<line x1='{sx(value):.1f}' y1='150' x2='{sx(value):.1f}' y2='188' stroke='#c4b8a8' stroke-width='3'/>"
-                )
-    parts.append(f"<polyline fill='none' stroke='#1c1915' stroke-width='2' points='{' '.join(pts)}'/>")
-    parts.append(f"<line x1='{sx(mu):.1f}' y1='24' x2='{sx(mu):.1f}' y2='188' stroke='#1c1915' stroke-dasharray='3 3'/>")
-    parts.append(f"<text x='{sx(mu):.1f}' y='16' text-anchor='middle' font-size='11' fill='#5e584f'>{impact_text(mu)}</text>")
-    if actual is not None and lo <= actual <= hi:
-        color = "#0c7a3a" if actual > 0 else "#c62828" if actual < 0 else "#1c1915"
-        parts.append(f"<line x1='{sx(actual):.1f}' y1='24' x2='{sx(actual):.1f}' y2='188' stroke='{color}' stroke-width='2'/>")
+
+def _miss_tip(row: Ensemble) -> str:
+    when = ""
+    if row.ts:
+        when = parse_ts(row.ts).strftime("%d %b %H:%M") + ". "
+    kind = "Open" if row.horizon == "open" else "Close"
+    miss = impact_text(float(row.residual or 0))
+    if row.nifty_level is None or row.actual is None:
+        return f"{when}{kind}. Miss {miss}."
+    call = row.nifty_level + row.mu
+    done = row.nifty_level + row.actual
+    return f"{when}{kind}. Call {_level_text(call)}. Nifty {_level_text(done)}. Miss {miss}."
+
+
+def _error_svg(rows: list[Ensemble]) -> str:
+    values = [float(row.residual or 0) for row in rows]
+    mean = sum(values) / len(values)
+    width, height = 440, 268
+    pad_l, pad_r, pad_t, pad_b = 46, 14, 16, 44
+    plot_top, plot_bottom = pad_t, height - pad_b
+    lo = min(values + [0.0, mean])
+    hi = max(values + [0.0, mean])
+    pad = max((hi - lo) * 0.12, 12)
+    lo -= pad
+    hi += pad
+    span = hi - lo or 1
+    last = max(len(rows) - 1, 1)
+
+    def sx(index: int) -> float:
+        return pad_l + (width - pad_l - pad_r) * index / last
+
+    def sy(value: float) -> float:
+        return plot_top + (hi - value) / span * (plot_bottom - plot_top)
+
+    label = f"Miss over time. Average {impact_text(mean)}. Latest {impact_text(values[-1])}."
+    parts = [
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='{escape(label)}' "
+        "style='font-family:ui-sans-serif,sans-serif'>"
+    ]
+    for tick in _miss_ticks(lo, hi):
+        y = sy(tick)
+        stroke = "#c4b8a8" if abs(tick) < 1e-6 else "#f3efe8"
+        parts.append(f"<line x1='{pad_l}' y1='{y:.1f}' x2='{width - pad_r}' y2='{y:.1f}' stroke='{stroke}'/>")
+        parts.append(
+            f"<text x='{pad_l - 6}' y='{y + 3:.1f}' text-anchor='end' font-size='10' fill='#746c62'>{impact_text(tick)}</text>"
+        )
+    mean_y = sy(mean)
+    parts.append(
+        f"<line x1='{pad_l}' y1='{mean_y:.1f}' x2='{width - pad_r}' y2='{mean_y:.1f}' "
+        "stroke='#6b3fa0' stroke-dasharray='4 3' stroke-width='1.5'/>"
+    )
+    path = _smooth_path(values)
+    if path:
+        pts = " ".join(f"{sx(index):.1f},{sy(value):.1f}" for index, value in enumerate(path))
+        parts.append(f"<polyline fill='none' stroke='#1c1915' stroke-width='2.5' points='{pts}'/>")
+    avg_y = mean_y - 8
+    if avg_y < plot_top + 11:
+        avg_y = mean_y + 14
+    parts.append(
+        f"<text x='{width - pad_r}' y='{avg_y:.1f}' text-anchor='end' font-size='11' fill='#6b3fa0'>"
+        f"avg {impact_text(mean)}</text>"
+    )
+    zero = sy(0)
+    for index, row in enumerate(rows):
+        value = values[index]
+        color = "#0c7a3a" if value > 0.5 else "#c62828" if value < -0.5 else "#5e584f"
+        x = sx(index)
+        y = sy(value)
+        tip = escape(_miss_tip(row))
+        parts.append(
+            f"<g><title>{tip}</title>"
+            f"<line x1='{x:.1f}' y1='{zero:.1f}' x2='{x:.1f}' y2='{y:.1f}' stroke='{color}' stroke-width='2'/>"
+            f"<circle cx='{x:.1f}' cy='{y:.1f}' r='4.5' fill='{color}' stroke='#fff' stroke-width='1.5'/>"
+            f"</g>"
+        )
+        if row.horizon == "open":
+            oy = min(y, zero) - 8
+            parts.append(f"<text x='{x:.1f}' y='{oy:.1f}' text-anchor='middle' font-size='9' fill='#746c62'>open</text>")
+    placed = -1e9
+    day_seen = ""
+    for index, row in enumerate(rows):
+        x = sx(index)
+        keep = index == 0 or index == len(rows) - 1 or x - placed >= 52
+        if not keep or not row.ts:
+            continue
+        stamp = parse_ts(row.ts)
+        anchor = "start" if index == 0 else "end" if index == len(rows) - 1 else "middle"
+        lx = pad_l if index == 0 else (width - pad_r if index == len(rows) - 1 else x)
+        parts.append(
+            f"<text x='{lx:.1f}' y='{plot_bottom + 16:.1f}' text-anchor='{anchor}' font-size='10' fill='#746c62'>"
+            f"{stamp.strftime('%H:%M')}</text>"
+        )
+        day = stamp.strftime("%d %b")
+        if day != day_seen:
+            parts.append(
+                f"<text x='{lx:.1f}' y='{plot_bottom + 28:.1f}' text-anchor='{anchor}' font-size='10' fill='#746c62'>{day}</text>"
+            )
+            day_seen = day
+        placed = x
+    if not rows[0].ts:
+        placed = -1e9
+        for index in range(len(rows)):
+            x = sx(index)
+            if index not in (0, len(rows) - 1) and x - placed < 34:
+                continue
+            parts.append(
+                f"<text x='{x:.1f}' y='{plot_bottom + 16:.1f}' text-anchor='middle' font-size='10' fill='#746c62'>{index + 1}</text>"
+            )
+            placed = x
     parts.append("</svg>")
     return "".join(parts)

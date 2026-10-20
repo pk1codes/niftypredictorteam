@@ -408,6 +408,12 @@ class Store:
         )
         self.conn.commit()
 
+    def families(self) -> list[tuple[str, int, float]]:
+        rows = self.conn.execute(
+            "SELECT key, n_scored, residual_sum FROM families WHERE n_scored > 0 ORDER BY key"
+        ).fetchall()
+        return [(row["key"], int(row["n_scored"]), float(row["residual_sum"])) for row in rows]
+
     def family_stats(self, key: str) -> tuple[int, float]:
         row = self.conn.execute(
             "SELECT n_scored, residual_sum FROM families WHERE key = ?",
