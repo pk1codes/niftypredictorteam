@@ -800,7 +800,9 @@ def test_important_feeds_show_that_they_were_checked():
     assert "class='feed ok'" in page
     assert "Pulse" in page
     assert "Checked · 8 stories" in page
-    assert "CoreWeave jumps — Kept, +8. Not proved irrelevant." in page
+    assert "CoreWeave jumps" in page
+    assert "1 of 1 entered the call, adding <strong class='plus'>+8</strong>." in page
+    assert "No proof it cannot move Nifty." in page
     assert "class='feed bad'" in page
     assert "Tijori" in page
     assert "No answer" in page

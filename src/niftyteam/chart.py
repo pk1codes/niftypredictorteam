@@ -162,16 +162,49 @@ def render_page(
   .news .quiet {{ margin: 0; color: #746c62; font: 14px/1.4 ui-sans-serif, sans-serif; }}
   .feeds {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 16px; box-shadow: inset 3px 0 0 #1d4e89; }}
   .feeds h2 {{ margin: 0 0 8px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
-  .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-  .feed {{ display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; }}
-  .feed .dot {{ margin-top: 6px; }}
-  .feed .lines {{ flex: 1 0 100%; margin: 2px 0 0; padding: 0 0 0 18px; list-style: disc; }}
-  .feed .lines li {{ margin: 2px 0; color: #3f3a34; font: 13px/1.35 ui-sans-serif, sans-serif; }}
-  .feed.ok {{ background: #f3faf6; }}
-  .feed.bad {{ background: #fdf4f3; }}
-  .feed.idle {{ background: #fbf6ee; }}
-  .feed .name {{ width: auto; }}
-  .feed .line {{ color: #3f3a34; font: 14px/1.35 ui-sans-serif, sans-serif; }}
+  .feed-read {{ margin: 0 0 12px; color: #1c1915; font: 600 15px/1.35 ui-sans-serif, sans-serif; }}
+  .feed-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }}
+  .feed {{ display: block; padding: 10px 12px 12px; border-radius: 12px; background: #faf8f5; border: 1px solid #efeae2; }}
+  .feed.bad {{ background: #fdf4f3; border-color: #f0d6d3; }}
+  .feed.idle {{ background: #fbf6ee; border-color: #f0e4cc; }}
+  .feed-head {{ display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }}
+  .feed .name {{ width: auto; font-size: 15px; }}
+  .feed .line {{ color: #746c62; font: 13px/1.3 ui-sans-serif, sans-serif; }}
+  .feed-empty {{ margin: 8px 0 0; color: #8a1c1c; font: 14px/1.35 ui-sans-serif, sans-serif; }}
+  .feed.idle .feed-empty {{ color: #8a5a00; }}
+  .fate-bar {{ display: flex; height: 14px; margin: 10px 0 6px; border-radius: 999px; overflow: hidden; background: #f4f1ea; }}
+  .fate-bar span {{ min-width: 8px; }}
+  .fate-bar .up {{ background: #0c7a3a; }}
+  .fate-bar .down {{ background: #c62828; }}
+  .fate-bar .flat {{ background: #1d4e89; }}
+  .fate-bar .watch {{ background: #e4c48a; }}
+  .fate-bar .aside {{ background: #c4b8a8; }}
+  .fate-key {{ display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; color: #3f3a34; font: 13px/1.3 ui-sans-serif, sans-serif; }}
+  .fate-key strong {{ font-variant-numeric: tabular-nums; }}
+  .swatch {{ width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; display: inline-block; vertical-align: 1px; }}
+  .swatch.up {{ background: #0c7a3a; }}
+  .swatch.down {{ background: #c62828; }}
+  .swatch.flat {{ background: #1d4e89; }}
+  .swatch.none {{ background: transparent; border: 1px solid #c4b8a8; box-sizing: border-box; }}
+  .swatch.watch {{ background: #e4c48a; }}
+  .swatch.aside {{ background: #c4b8a8; }}
+  .fate-group {{ margin-top: 12px; }}
+  .fate-group h3 {{ margin: 0; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #746c62; }}
+  .fate-deck, .fate-group .quiet {{ margin: 3px 0 0; color: #746c62; font: 12px/1.35 ui-sans-serif, sans-serif; }}
+  .story {{ display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid #f0ebe3; }}
+  .story .title {{ flex: 1; min-width: 0; color: #1c1915; font: 13px/1.35 ui-sans-serif, sans-serif; }}
+  .story .why {{ display: block; margin-top: 1px; color: #746c62; font: 12px/1.3 ui-sans-serif, sans-serif; }}
+  .story .impact {{ min-width: 0; padding: 2px 8px; border-radius: 999px; background: #f4f1ea; }}
+  .story .plus {{ background: #e7f5ec; }}
+  .story .minus {{ background: #fdeceb; }}
+  .story.aside .title {{ color: #5e584f; }}
+  .watch-pile {{ margin-top: 12px; }}
+  .watch-pile summary {{ cursor: pointer; color: #5e584f; font: 600 13px/1.3 ui-sans-serif, sans-serif; }}
+  .watch-pile summary::-webkit-details-marker {{ display: none; }}
+  .watch-pile summary::before {{ content: "▸ "; color: #746c62; }}
+  .watch-pile[open] summary::before {{ content: "▾ "; }}
+  .story.watch {{ display: block; padding: 4px 0; }}
+  .story.watch .title {{ color: #5e584f; }}
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
     .sub {{ font-size: 30px; }}
@@ -199,7 +232,7 @@ def render_page(
   <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the offshore quote. <span class="mark-next">Next</span> is this hour’s call. The shaded bell covers ±3 spreads around the <span class="mark-mean">200-day mean</span>. Faint curves are the previous three bells.</figcaption></figure>
   {split}
   {_matters(events)}
-  <figure class="errors">{errors}<figcaption>Each dot is one past call, oldest on the left. Below zero, the call was too high. The dashed line is the average miss. The curve is the recent path, and it appears once three scores exist.</figcaption></figure>
+  <figure class="errors">{errors}<figcaption>Each dot is one past call, oldest on the left. Below zero, the call was too high. Above zero, it was too low. The dashed line is the average miss. The curve is the recent path of the close calls.</figcaption></figure>
   {log}
   {news}
   {learning}
@@ -235,24 +268,169 @@ def _feeds_html(feeds: list[dict] | None) -> str:
     if not feeds:
         return ""
     cards = []
+    totals = {"used": 0, "watch": 0, "aside": 0, "points": 0}
     for row in feeds:
-        state = str(row.get("state") or "wait")
-        kind = "ok" if state == "read" else "bad" if state in {"miss", "down"} else "idle"
-        label = str(row.get("label") or "")
-        detail = str(row.get("detail") or "")
-        lines = [str(line) for line in row.get("lines") or [] if str(line)]
-        listed = "".join(f"<li>{escape(line)}</li>" for line in lines)
-        extra = f"<ul class='lines'>{listed}</ul>" if listed else ""
-        cards.append(
-            f"<div class='feed {kind}'><span class='dot {kind}'></span>"
-            f"<span class='name'>{escape(label)}</span>"
-            f"<span class='line'>{escape(detail)}</span>{extra}</div>"
-        )
+        card, counts = _feed_card(row)
+        cards.append(card)
+        for key in totals:
+            totals[key] += counts[key]
+    summary = _feeds_summary(totals)
+    summary_html = f"<p class='feed-read'>{summary}</p>" if summary else ""
     return (
         "<section class='feeds' aria-label='Important feeds'>"
         "<h2>Important feeds</h2>"
-        "<p class='deck'>Every Pulse and Tijori story. Set aside only if it cannot move Nifty.</p>"
+        "<p class='deck'>A story is set aside only when it cannot move Nifty. The rest stay on watch. Points are added only when the words have a direction.</p>"
+        f"{summary_html}"
         f"<div class='feed-row'>{''.join(cards)}</div></section>"
+    )
+
+
+def _feeds_summary(totals: dict[str, int]) -> str:
+    total = totals["used"] + totals["watch"] + totals["aside"]
+    if total == 0:
+        return ""
+    if totals["used"]:
+        lead = (
+            f"{totals['used']} of {total} entered the call, adding "
+            f"<strong class='{impact_class(totals['points'])}'>{impact_text(totals['points'])}</strong>."
+        )
+    else:
+        lead = f"None of {total} stories entered the call."
+    rest = []
+    if totals["watch"]:
+        rest.append(f"{totals['watch']} stayed on watch with no direction.")
+    if totals["aside"]:
+        rest.append(f"{totals['aside']} were set aside.")
+    return lead + (" " + " ".join(rest) if rest else "")
+
+
+def _feed_card(row: dict) -> tuple[str, dict[str, int]]:
+    state = str(row.get("state") or "wait")
+    kind = "ok" if state == "read" else "bad" if state in {"miss", "down"} else "idle"
+    label = escape(str(row.get("label") or ""))
+    detail = str(row.get("detail") or "")
+    stories = [_story_fate(str(line)) for line in row.get("lines") or [] if str(line)]
+    empty = {"used": 0, "watch": 0, "aside": 0, "points": 0}
+    head = f"<div class='feed-head'><span class='name'>{label}</span>"
+    if not stories:
+        note = f"<p class='feed-empty'>{escape(detail)}</p>" if detail else ""
+        return f"<div class='feed {kind}'>{head}</div>{note}</div>", empty
+    head += f"<span class='line'>{escape(detail)}</span></div>"
+    used = [item for item in stories if item["fate"] == "used"]
+    watch = [item for item in stories if item["fate"] == "watch"]
+    aside = [item for item in stories if item["fate"] == "aside"]
+    points = sum(item["points"] or 0 for item in used)
+    counts = {"used": len(used), "watch": len(watch), "aside": len(aside), "points": points}
+    up = sum(1 for item in used if (item["points"] or 0) > 0)
+    down = sum(1 for item in used if (item["points"] or 0) < 0)
+    flat = len(used) - up - down
+    bar_counts = {"up": up, "down": down, "flat": flat, "watch": len(watch), "aside": len(aside)}
+    return (
+        f"<div class='feed {kind}'>{head}{_fate_bar(bar_counts)}{_fate_key(counts)}"
+        f"{_used_group(used)}{_aside_group(aside)}{_watch_group(watch)}</div>"
+    ), counts
+
+
+def _story_fate(line: str) -> dict:
+    title, _, note = line.partition(" — ")
+    note = note.strip()
+    if note.startswith("In the call") or note.startswith("Kept,"):
+        fate = "used"
+    elif note.startswith("Kept"):
+        fate = "watch"
+    elif note:
+        fate = "aside"
+    else:
+        fate = "watch"
+    return {"title": title.strip(), "note": note, "fate": fate, "points": _note_points(note)}
+
+
+def _note_points(note: str) -> int | None:
+    for token in note.replace(",", " ").replace(".", " ").split():
+        if token[:1] in "+-" and token[1:].isdigit():
+            return int(token)
+    return None
+
+
+def _fate_bar(counts: dict[str, int]) -> str:
+    parts = []
+    for key in ("up", "down", "flat", "watch", "aside"):
+        count = counts.get(key, 0)
+        if count:
+            parts.append(f"<span class='{key}' style='flex:{count} {count} 0'></span>")
+    if not parts:
+        return ""
+    return f"<div class='fate-bar'>{''.join(parts)}</div>"
+
+
+def _fate_key(counts: dict[str, int]) -> str:
+    if counts["used"]:
+        kind = impact_class(counts["points"])
+        call = f"<strong class='{kind}'>{impact_text(counts['points'])}</strong> in the call"
+        swatch = kind
+    else:
+        call = "<strong>0</strong> in the call"
+        swatch = "none"
+    return (
+        "<p class='fate-key'>"
+        f"<span><i class='swatch {swatch}'></i>{call}</span>"
+        f"<span><i class='swatch watch'></i><strong>{counts['watch']}</strong> on watch</span>"
+        f"<span><i class='swatch aside'></i><strong>{counts['aside']}</strong> set aside</span>"
+        "</p>"
+    )
+
+
+def _used_group(rows: list[dict]) -> str:
+    if not rows:
+        return "<div class='fate-group'><h3>In the call</h3><p class='quiet'>Nothing from this feed entered the call.</p></div>"
+    body = "".join(_used_row(row) for row in rows)
+    return (
+        "<div class='fate-group'>"
+        "<h3>In the call</h3>"
+        "<p class='fate-deck'>These words had a direction, so the points went into the call.</p>"
+        f"{body}</div>"
+    )
+
+
+def _used_row(row: dict) -> str:
+    points = row["points"]
+    pill = ""
+    if points is not None:
+        pill = f"<span class='impact {impact_class(points)}'>{impact_text(points)}</span>"
+    why = ""
+    if row["note"].startswith("Kept,"):
+        why = "<span class='why'>No proof it cannot move Nifty.</span>"
+    title = f"<span class='title'>{escape(row['title'])}{why}</span>"
+    return f"<div class='story used'>{title}{pill}</div>"
+
+
+def _aside_group(rows: list[dict]) -> str:
+    if not rows:
+        return "<div class='fate-group'><h3>Set aside</h3><p class='quiet'>Nothing was set aside.</p></div>"
+    body = "".join(
+        "<div class='story aside'>"
+        f"<span class='title'>{escape(row['title'])}<span class='why'>{escape(row['note'])}</span></span>"
+        "</div>"
+        for row in rows
+    )
+    return (
+        "<div class='fate-group'>"
+        "<h3>Set aside</h3>"
+        "<p class='fate-deck'>Kept out because the story cannot move Nifty.</p>"
+        f"{body}</div>"
+    )
+
+
+def _watch_group(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    body = "".join(
+        f"<div class='story watch'><span class='title'>{escape(row['title'])}</span></div>" for row in rows
+    )
+    return (
+        "<details class='watch-pile'>"
+        f"<summary>{len(rows)} on watch. No proved direction, so no points.</summary>"
+        f"{body}</details>"
     )
 
 
@@ -1277,8 +1455,8 @@ def _miss_tip(row: Ensemble) -> str:
 def _error_svg(rows: list[Ensemble]) -> str:
     values = [float(row.residual or 0) for row in rows]
     mean = sum(values) / len(values)
-    width, height = 440, 268
-    pad_l, pad_r, pad_t, pad_b = 46, 14, 16, 44
+    width, height = 440, 300
+    pad_l, pad_r, pad_t, pad_b = 46, 36, 18, 72
     plot_top, plot_bottom = pad_t, height - pad_b
     lo = min(values + [0.0, mean])
     hi = max(values + [0.0, mean])
@@ -1311,9 +1489,11 @@ def _error_svg(rows: list[Ensemble]) -> str:
         f"<line x1='{pad_l}' y1='{mean_y:.1f}' x2='{width - pad_r}' y2='{mean_y:.1f}' "
         "stroke='#6b3fa0' stroke-dasharray='4 3' stroke-width='1.5'/>"
     )
-    path = _smooth_path(values)
+    close_index = [index for index, row in enumerate(rows) if row.horizon != "open"]
+    path_index = close_index if len(close_index) >= 3 else list(range(len(values)))
+    path = _smooth_path([values[index] for index in path_index])
     if path:
-        pts = " ".join(f"{sx(index):.1f},{sy(value):.1f}" for index, value in enumerate(path))
+        pts = " ".join(f"{sx(path_index[index]):.1f},{sy(value):.1f}" for index, value in enumerate(path))
         parts.append(f"<polyline fill='none' stroke='#1c1915' stroke-width='2.5' points='{pts}'/>")
     avg_y = mean_y - 8
     if avg_y < plot_top + 11:
@@ -1336,29 +1516,34 @@ def _error_svg(rows: list[Ensemble]) -> str:
             f"</g>"
         )
         if row.horizon == "open":
-            oy = min(y, zero) - 8
+            oy = y - 11
+            if oy < plot_top + 9:
+                oy = y + 14
             parts.append(f"<text x='{x:.1f}' y='{oy:.1f}' text-anchor='middle' font-size='9' fill='#746c62'>open</text>")
-    placed = -1e9
-    day_seen = ""
-    for index, row in enumerate(rows):
-        x = sx(index)
-        keep = index == 0 or index == len(rows) - 1 or x - placed >= 52
-        if not keep or not row.ts:
-            continue
-        stamp = parse_ts(row.ts)
-        anchor = "start" if index == 0 else "end" if index == len(rows) - 1 else "middle"
-        lx = pad_l if index == 0 else (width - pad_r if index == len(rows) - 1 else x)
-        parts.append(
-            f"<text x='{lx:.1f}' y='{plot_bottom + 16:.1f}' text-anchor='{anchor}' font-size='10' fill='#746c62'>"
-            f"{stamp.strftime('%H:%M')}</text>"
-        )
-        day = stamp.strftime("%d %b")
-        if day != day_seen:
+        if index == len(rows) - 1:
             parts.append(
-                f"<text x='{lx:.1f}' y='{plot_bottom + 28:.1f}' text-anchor='{anchor}' font-size='10' fill='#746c62'>{day}</text>"
+                f"<text x='{x + 9:.1f}' y='{y + 3:.1f}' text-anchor='start' font-size='11' fill='{color}'>"
+                f"{impact_text(value)}</text>"
             )
-            day_seen = day
-        placed = x
+    if rows[0].ts:
+        days: list[list] = []
+        for index, row in enumerate(rows):
+            stamp = parse_ts(row.ts)
+            day = stamp.strftime("%d %b")
+            y = plot_bottom + 14
+            parts.append(
+                f"<text x='{sx(index):.1f}' y='{y:.1f}' text-anchor='start' font-size='10' fill='#746c62' "
+                f"transform='rotate(52 {sx(index):.1f} {y:.1f})'>{stamp.strftime('%H:%M')}</text>"
+            )
+            if not days or days[-1][0] != day:
+                days.append([day, index, index])
+            else:
+                days[-1][2] = index
+        for day, start, end in days:
+            x = (sx(start) + sx(end)) / 2
+            parts.append(
+                f"<text x='{x:.1f}' y='{height - 8:.1f}' text-anchor='middle' font-size='11' fill='#4a453e'>{day}</text>"
+            )
     if not rows[0].ts:
         placed = -1e9
         for index in range(len(rows)):
