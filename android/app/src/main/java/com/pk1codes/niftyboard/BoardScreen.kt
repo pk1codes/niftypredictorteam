@@ -1,7 +1,9 @@
 package com.pk1codes.niftyboard
 
+import android.content.Intent
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.net.Uri
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -9,6 +11,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
@@ -286,6 +290,17 @@ private fun WhyCard(forecast: Forecast) {
             "This is a probability, not a promise.",
             color = Mute,
             fontSize = 13.sp,
+        )
+        val context = LocalContext.current
+        Text(
+            "Privacy",
+            color = Band,
+            fontSize = 13.sp,
+            modifier = Modifier.clickable {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://pk1codes.github.io/niftypredictorteam/privacy.html"))
+                )
+            },
         )
     }
 }

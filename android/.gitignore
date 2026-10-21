@@ -5,3 +5,5 @@ captures/
 *.apk
 *.aab
 .cxx/
+key.properties
+*.jks
