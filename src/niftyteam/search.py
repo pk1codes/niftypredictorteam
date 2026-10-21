@@ -12,6 +12,38 @@ import httpx
 from niftyteam.config import IST
 
 UA = "niftyteam/0.1 (local research; +https://localhost)"
+LIVE_SECONDS = 300
+
+
+def quote_stamp(value) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=IST)
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.replace(".", "", 1).isdigit()):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).astimezone(IST)
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=IST)
+    except ValueError:
+        pass
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
+
+
+def quote_is_live(stamp: datetime | None, now: datetime, seconds: int = LIVE_SECONDS) -> bool:
+    if stamp is None:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=IST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=IST)
+    return abs((now - stamp).total_seconds()) <= seconds
 
 
 def fetch_feed(client: httpx.Client, url: str) -> list[dict]:
@@ -66,7 +98,8 @@ def fetch_price(client: httpx.Client) -> tuple[float | None, list[tuple[str, flo
     )
     response.raise_for_status()
     result = response.json()["chart"]["result"][0]
-    price = result.get("meta", {}).get("regularMarketPrice")
+    meta = result.get("meta") or {}
+    price = meta.get("regularMarketPrice")
     stamps = result.get("timestamp") or []
     quote = result.get("indicators", {}).get("quote", [{}])[0]
     closes = quote.get("close") or []
@@ -79,7 +112,29 @@ def fetch_price(client: httpx.Client) -> tuple[float | None, list[tuple[str, flo
             continue
         day = datetime.fromtimestamp(stamp, tz=timezone.utc).astimezone(IST).date().isoformat()
         bars.append((day, float(close), None if opened is None else float(opened)))
-    return (float(price) if price is not None else None), bars
+    traded = quote_stamp(meta.get("regularMarketTime"))
+    return (float(price) if price is not None else None), bars, traded
+
+
+def fetch_bars(client: httpx.Client, symbol: str, span: str = "5y") -> list[tuple[str, float]]:
+    """Daily closes. The date is the India date of the bar's timestamp."""
+    response = client.get(
+        "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(symbol, safe=""),
+        params={"interval": "1d", "range": span},
+        timeout=20,
+        headers={"User-Agent": "niftyteam/0.1"},
+    )
+    response.raise_for_status()
+    result = response.json()["chart"]["result"][0]
+    stamps = result.get("timestamp") or []
+    closes = (result.get("indicators") or {}).get("quote", [{}])[0].get("close") or []
+    folded: dict[str, float] = {}
+    for stamp, close in zip(stamps, closes):
+        if stamp is None or close is None:
+            continue
+        day = datetime.fromtimestamp(stamp, tz=timezone.utc).astimezone(IST).date().isoformat()
+        folded[day] = float(close)
+    return sorted(folded.items())
 
 
 def fetch_level(client: httpx.Client, symbol: str) -> float | None:
@@ -128,7 +183,50 @@ def parse_gift(payload: dict) -> dict | None:
         "price": price,
         "change": float(raw_change),
         "expiry": near["EXPIRYDATE"],
+        "asof": str(near.get("TIMESTMP") or ""),
     }
+
+
+def fetch_nifty_quote(client: httpx.Client, now: datetime | None = None) -> dict | None:
+    now = now or datetime.now(IST)
+    response = client.get(
+        "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI",
+        params={"interval": "1m", "range": "1d"},
+        timeout=12,
+        headers={"User-Agent": "niftyteam/0.1"},
+    )
+    response.raise_for_status()
+    meta = response.json()["chart"]["result"][0].get("meta") or {}
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        return None
+    stamp = quote_stamp(meta.get("regularMarketTime"))
+    return {
+        "price": float(price),
+        "live": quote_is_live(stamp, now),
+        "asof": stamp.isoformat() if stamp else "",
+    }
+
+
+def live_quotes(now: datetime | None = None) -> dict:
+    now = now or datetime.now(IST)
+    found = {"nifty": None, "gift": None}
+    try:
+        with httpx.Client(timeout=12, headers={"User-Agent": "niftyteam/0.1"}) as client:
+            try:
+                found["nifty"] = fetch_nifty_quote(client, now)
+            except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError):
+                found["nifty"] = None
+            try:
+                gift = fetch_gift(client)
+            except (httpx.HTTPError, KeyError, ValueError, TypeError):
+                gift = None
+            if gift is not None:
+                gift["live"] = quote_is_live(quote_stamp(gift.get("asof")), now)
+                found["gift"] = gift
+    except httpx.HTTPError:
+        return found
+    return found
 
 
 def close_on_or_after(bars: list, day: str) -> float | None:

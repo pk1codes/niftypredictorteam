@@ -4,8 +4,11 @@ import argparse
 import json
 
 from niftyteam.ahead import ahead_view
-from niftyteam.chart import render_page
-from niftyteam.config import find_root, impact_text, load_dotenv
+from niftyteam.evolve import evolve_view
+from niftyteam.signoff import presented, write_public_forecast
+from niftyteam.chart import render_page, write_prices
+from niftyteam.config import find_root, impact_text, load_dotenv, now_ist
+from niftyteam.search import live_quotes
 from niftyteam.ensemble import book_std
 from niftyteam.store import Store
 from niftyteam.tick import important_view, tick
@@ -13,11 +16,18 @@ from niftyteam.tick import important_view, tick
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="niftyteam")
-    parser.add_argument("command", choices=("tick", "board", "report", "chart"))
+    parser.add_argument("command", choices=("tick", "board", "report", "chart", "quotes"))
     args = parser.parse_args()
     if args.command == "tick":
         raise SystemExit(tick())
     root = find_root()
+    if args.command == "quotes":
+        found = live_quotes()
+        path = root / "data" / "prices.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_prices(path, found.get("nifty"), found.get("gift"))
+        print(path)
+        return
     load_dotenv(root)
     store = Store(root / "data" / "niftyteam.sqlite")
     try:
@@ -32,9 +42,20 @@ def main() -> None:
             residuals = [(row.residual, row.sigma) for row in rows if row.residual is not None]
             cached = store.meta("nifty")
             gift_price = store.meta("gift_nifty")
-            gift = None
-            if gift_price:
-                gift = {"price": float(gift_price), "change": float(store.meta("gift_change") or 0)}
+            found = live_quotes()
+            spot = found.get("nifty") or {}
+            fresh_gift = found.get("gift")
+            if spot.get("price") is not None:
+                cached = f"{float(spot['price']):.2f}"
+                spot_live = bool(spot.get("live"))
+            else:
+                spot_live = False
+            if fresh_gift and fresh_gift.get("price") is not None:
+                gift = fresh_gift
+            elif gift_price:
+                gift = {"price": float(gift_price), "change": float(store.meta("gift_change") or 0), "live": False}
+            else:
+                gift = None
             fii = store.meta("fii_net")
             agents = store.meta("agents")
             raw_notes = store.meta("issues")
@@ -59,9 +80,20 @@ def main() -> None:
                 ahead_view(store),
                 important_view(store),
                 store.families(),
+                presented(store, now_ist()),
+                spot_live=spot_live,
             )
             path = root / "data" / "chart.html"
             path.write_text(html)
+            level = float(cached) if cached else None
+            write_prices(
+                path.parent / "prices.json",
+                None if level is None else {"price": level, "live": spot_live},
+                gift,
+            )
+            shown = presented(store, now_ist())
+            write_public_forecast(path.parent / "forecast.json", shown)
+            write_public_forecast(root / "docs" / "forecast.json", shown)
             print(path)
     finally:
         store.close()

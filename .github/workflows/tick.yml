@@ -35,11 +35,12 @@ jobs:
         run: |
           mkdir -p docs
           cp data/chart.html docs/index.html
+          cp data/forecast.json docs/forecast.json
           touch docs/.nojekyll
 
       - name: Commit board
         run: |
-          git add data/niftyteam.sqlite docs/index.html docs/.nojekyll
+          git add data/niftyteam.sqlite docs/index.html docs/forecast.json docs/.nojekyll
           git diff --cached --quiet && exit 0
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update the board"
           git push

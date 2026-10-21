@@ -7,8 +7,10 @@ from uuid import uuid4
 import httpx
 
 from niftyteam.ahead import ahead_view, run_ahead
+from niftyteam.evolve import run_evolve
+from niftyteam.signoff import presented, write_public_forecast
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, missed, wake, watch_line
-from niftyteam.chart import render_page
+from niftyteam.chart import render_page, write_prices
 from niftyteam.config import (
     BOARD_AGENT,
     BOSS_AGENT,
@@ -62,7 +64,7 @@ from niftyteam.horizons import (
 from niftyteam.models import Claim, Ensemble, Source
 from niftyteam.pcr import fetch_chain, fetch_flows, in_session, option_book, trailing_std
 from niftyteam.scout import query_for, scout_sentence, search_all, search_web
-from niftyteam.search import domain_of, fetch_feed, fetch_gift, fetch_level, fetch_price, fresh, hrefs
+from niftyteam.search import domain_of, fetch_feed, fetch_gift, fetch_level, fetch_price, fresh, hrefs, quote_is_live, quote_stamp
 
 AHEAD_FEEDS = {"brent": "BZ=F", "usdinr": "INR=X", "es": "ES=F"}
 OPTIONAL_FEEDS = {"gold": "GC=F", "indiavix": "^INDIAVIX"}
@@ -187,7 +189,12 @@ def tick(root=None) -> int:
             gift_missing=gift is None,
             scored=any(row.residual is not None for row in store.ensembles()),
         )
-        _write_chart(store, root, ensemble, nifty, gift, open_call)
+        try:
+            run_evolve(store, stamp)
+        except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError):
+            pass
+        forecast = presented(store, stamp)
+        _write_chart(store, root, ensemble, nifty, gift, open_call, forecast)
         _print_board(store)
         return 0
     finally:
@@ -197,9 +204,11 @@ def tick(root=None) -> int:
 def _price(store: Store, stamp) -> tuple[float | None, list]:
     try:
         with httpx.Client(headers={"User-Agent": "niftyteam/0.1"}) as client:
-            price, bars = fetch_price(client)
+            price, bars, traded = fetch_price(client)
         if price is not None:
             store.set_meta("nifty", f"{price:.2f}")
+        if traded is not None:
+            store.set_meta("nifty_asof", traded.isoformat())
         return price, bars
     except (httpx.HTTPError, KeyError, ValueError, IndexError):
         cached = store.meta("nifty")
@@ -620,9 +629,11 @@ def _gift(store: Store) -> dict | None:
         price = store.meta("gift_nifty")
         if not price:
             return None
-        return {"price": float(price), "change": float(store.meta("gift_change") or 0)}
+        return {"price": float(price), "change": float(store.meta("gift_change") or 0), "live": False}
+    quote["live"] = quote_is_live(quote_stamp(quote.get("asof")), now_ist())
     store.set_meta("gift_nifty", f"{quote['price']:.2f}")
     store.set_meta("gift_change", f"{quote['change']:.2f}")
+    store.set_meta("gift_asof", str(quote.get("asof") or ""))
     return quote
 
 
@@ -1004,7 +1015,7 @@ def _retune_floor(store: Store, config: dict) -> None:
     store.set_meta("sigma_floor", str(next_sigma_floor(floor, flags)))
 
 
-def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict | None = None, open_call: Ensemble | None = None) -> None:
+def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict | None = None, open_call: Ensemble | None = None, forecast: dict | None = None) -> None:
     latest = ensemble or store.latest_ensemble("session")
     if open_call is None:
         open_call = store.latest_ensemble("open")
@@ -1013,6 +1024,7 @@ def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict |
     scored = len(residuals)
     cached = store.meta("nifty")
     level = nifty if nifty is not None else (float(cached) if cached else None)
+    spot_live = quote_is_live(quote_stamp(store.meta("nifty_asof")), now_ist())
     raw_fii = store.meta("fii_net")
     raw_agents = store.meta("agents")
     html = render_page(
@@ -1032,10 +1044,18 @@ def _write_chart(store: Store, root, ensemble, nifty: float | None, gift: dict |
         ahead_view(store),
         important_view(store),
         store.families(),
+        forecast,
+        spot_live=spot_live,
     )
     path = root / "data" / "chart.html"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html)
+    write_prices(
+        path.parent / "prices.json",
+        None if level is None else {"price": level, "live": spot_live},
+        gift,
+    )
+    write_public_forecast(path.parent / "forecast.json", forecast)
 
 
 def _saved_notes(store: Store) -> list[str]:

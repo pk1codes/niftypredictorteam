@@ -144,6 +144,12 @@ CREATE TABLE IF NOT EXISTS ahead_topic_days (
     scored INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, phrase)
 );
+CREATE TABLE IF NOT EXISTS evolve_bars (
+    symbol TEXT NOT NULL,
+    day TEXT NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY (symbol, day)
+);
 """
 
 
@@ -687,6 +693,23 @@ class Store:
     def set_ahead_status(self, name: str, status: str) -> None:
         self.conn.execute("UPDATE ahead_drivers SET status = ? WHERE name = ?", (status, name))
         self.conn.commit()
+
+    def save_evolve_bars(self, symbol: str, rows: list[tuple[str, float]]) -> None:
+        self.conn.executemany(
+            """
+            INSERT INTO evolve_bars (symbol, day, close) VALUES (?, ?, ?)
+            ON CONFLICT(symbol, day) DO UPDATE SET close = excluded.close
+            """,
+            [(symbol, day, float(close)) for day, close in rows],
+        )
+        self.conn.commit()
+
+    def evolve_bars(self, symbol: str) -> list[tuple[str, float]]:
+        found = self.conn.execute(
+            "SELECT day, close FROM evolve_bars WHERE symbol = ? ORDER BY day",
+            (symbol,),
+        ).fetchall()
+        return [(row["day"], float(row["close"])) for row in found]
 
     def level_pairs(self, name: str) -> list[tuple[float, float]]:
         rows = self.conn.execute(

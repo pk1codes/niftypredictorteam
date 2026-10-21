@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from html import escape
 
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta
 
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
 from niftyteam.estimate import news_shifts
+from niftyteam.evolve import band_mass
 from niftyteam.horizons import next_open, session_close
 from niftyteam.learn import agent_misses, learning_proof, learning_score, learning_trail, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
@@ -29,6 +31,9 @@ def render_page(
     ahead: dict | None = None,
     feeds: list[dict] | None = None,
     families: list[tuple[str, int, float]] | None = None,
+    forecast: dict | None = None,
+    *,
+    spot_live: bool = False,
 ) -> str:
     gift_price = None if gift is None else gift.get("price")
     current = _current_chart(ensemble, nifty, gift_price, history, last_run)
@@ -45,8 +50,15 @@ def render_page(
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
     called = _compare_html(ensemble, history or [], nifty)
     topline = _topline(history or [], gift, open_call)
-    outlook = _ahead_html(ahead)
+    session = _session_html(forecast)
+    range_board = _range_board(forecast, nifty, gift, spot_live)
+    outlook = "" if session else _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
+    lead = (
+        "The bell is the next cash close. The rest of the board is this hour."
+        if session
+        else "One prediction for the 15:30 close. Green is up. Red is down."
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -221,6 +233,27 @@ def render_page(
   .watch-pile summary::-webkit-details-marker {{ display: none; }}
   .watch-pile summary::before {{ content: "▸ "; color: #746c62; }}
   .watch-pile[open] summary::before {{ content: "▾ "; }}
+  .range-top {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 10px; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  .range-top h2 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #4a453e; }}
+  .range-top .expect {{ margin: 6px 0 0; color: #1c1915; font: 600 34px/1.1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .range-top .due, .range-top .deck {{ margin: 4px 0 0; color: #746c62; font: 13px/1.4 ui-sans-serif, sans-serif; }}
+  .range-top svg {{ width: 100%; height: auto; display: block; margin-top: 2px; }}
+  .range-key {{ display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 2px 0 0; color: #3f3a34; font: 14px/1.3 ui-sans-serif, sans-serif; }}
+  .swatch {{ display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }}
+  .swatch.spot {{ background: #0c7a3a; }}
+  .swatch.gift {{ background: #c47b12; }}
+  .pill {{ margin-left: 4px; font-style: normal; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
+  .pill.on {{ color: #0c7a3a; }}
+  .session {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 12px; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  .session h2 {{ margin: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
+  .session h2 .impact {{ letter-spacing: 0; font-size: 28px; }}
+  .session .expect {{ margin: 8px 0 0; color: #1c1915; font: 600 32px/1.1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .session .expect small {{ display: block; margin-top: 4px; color: #5e584f; font: 600 14px/1.35 ui-sans-serif, sans-serif; letter-spacing: 0; }}
+  .session .due, .session .deck {{ margin: 4px 0 0; color: #746c62; font: 13px/1.4 ui-sans-serif, sans-serif; }}
+  .session .proof-list {{ margin: 8px 0 0; padding: 0; list-style: none; }}
+  .session .proof-list li {{ padding: 6px 0; border-top: 1px solid #f0ebe3; color: #3f3a34; font: 14px/1.4 ui-sans-serif, sans-serif; }}
+  .session .drivers {{ display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; }}
+  .session .drivers span {{ color: #3f3a34; font: 13px/1.3 ui-sans-serif, sans-serif; }}
   .story.watch {{ display: block; padding: 4px 0; }}
   .story.watch .title {{ color: #5e584f; }}
   @media (max-width: 800px) {{
@@ -233,14 +266,16 @@ def render_page(
 </head>
 <body>
 <main>
+  {range_board}
   <header class="mast">
     <div>
       <h1>Nifty board</h1>
-      <p class="sub">{escape(level)}</p>
+      <p class="sub" id="spot-title">{escape(level)}</p>
     </div>
     {status}
   </header>
-  <p class="lead">One prediction for the 15:30 close. Green is up. Red is down.</p>
+  {session}
+  <p class="lead">{escape(lead)}</p>
   {topline}
   <div class="stats">
     {gift_tile}
@@ -277,6 +312,70 @@ function paint() {{
 }}
 paint();
 setInterval(paint, 1000);
+function markX(price) {{
+  const lo = +board.dataset.lo, hi = +board.dataset.hi;
+  const pad = +board.dataset.pad, width = +board.dataset.width;
+  const x = pad + (price - lo) / ((hi - lo) || 1) * (width - 2 * pad);
+  return Math.max(8, Math.min(width - 8, x));
+}}
+function fitMarks(data) {{
+  if (!board) return;
+  const anchor = +board.dataset.anchor, sigma = +board.dataset.sigma;
+  const low = anchor - sigma, high = anchor + sigma;
+  const pts = [low, high];
+  if (data.nifty && data.nifty.price != null) pts.push(+data.nifty.price);
+  if (data.gift && data.gift.price != null) pts.push(+data.gift.price);
+  const cushion = Math.max(sigma * 0.25, 8);
+  board.dataset.lo = Math.min.apply(null, pts) - cushion;
+  board.dataset.hi = Math.max.apply(null, pts) + cushion;
+  const x0 = markX(low), x1 = markX(high), xa = markX(anchor);
+  const shade = document.getElementById("band-shade");
+  shade.setAttribute("x", x0);
+  shade.setAttribute("width", Math.max(1, x1 - x0));
+  const axis = document.getElementById("band-anchor");
+  axis.setAttribute("x1", xa);
+  axis.setAttribute("x2", xa);
+  document.getElementById("range-low").setAttribute("x", x0);
+  document.getElementById("range-high").setAttribute("x", x1);
+  document.getElementById("range-anchor").setAttribute("x", xa);
+}}
+function setMark(dotId, readId, stateId, quote) {{
+  const dot = document.getElementById(dotId);
+  const read = document.getElementById(readId);
+  const state = document.getElementById(stateId);
+  if (!dot || !read || !state) return;
+  if (!quote || quote.price == null) {{
+    dot.setAttribute("visibility", "hidden");
+    read.textContent = "—";
+    state.textContent = "Closed";
+    state.className = "pill";
+    return;
+  }}
+  dot.setAttribute("cx", markX(+quote.price));
+  dot.setAttribute("visibility", "visible");
+  read.textContent = Math.round(+quote.price).toLocaleString("en-IN");
+  state.textContent = quote.live ? "Live" : "Closed";
+  state.className = quote.live ? "pill on" : "pill";
+}}
+function pullPrices() {{
+  if (!board) return;
+  fetch("prices.json", {{cache: "no-store"}}).then(function (res) {{
+    if (!res.ok) return null;
+    return res.json();
+  }}).then(function (data) {{
+    if (!data) return;
+    fitMarks(data);
+    setMark("spot-dot", "spot-read", "spot-state", data.nifty);
+    setMark("gift-dot", "gift-read", "gift-state", data.gift);
+    const title = document.getElementById("spot-title");
+    if (title && data.nifty && data.nifty.price != null) {{
+      title.textContent = "Nifty " + Math.round(+data.nifty.price).toLocaleString("en-IN");
+    }}
+  }}).catch(function () {{}});
+}}
+const board = document.getElementById("range-board");
+pullPrices();
+setInterval(pullPrices, 15000);
 </script>
 </body>
 </html>
@@ -795,6 +894,266 @@ def _settled_calls(ensemble: Ensemble | None, history: list[Ensemble]) -> tuple[
     if finished is not None and forward is not None and forward.ts < finished.ts:
         forward = None
     return finished, forward
+
+
+def write_prices(path, nifty: dict | None, gift: dict | None) -> None:
+    def pack(quote: dict | None) -> dict | None:
+        if not quote or quote.get("price") is None:
+            return None
+        return {"price": float(quote["price"]), "live": bool(quote.get("live"))}
+
+    path.write_text(json.dumps({"nifty": pack(nifty), "gift": pack(gift)}), encoding="utf-8")
+
+
+def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, spot_live: bool) -> str:
+    if not forecast or forecast.get("sigma") in (None, 0):
+        return ""
+    anchor = float(forecast["anchor"])
+    sigma = float(forecast["sigma"])
+    low = anchor - sigma
+    high = anchor + sigma
+    spot = None if nifty is None else float(nifty)
+    gift_px = None if not gift or gift.get("price") is None else float(gift["price"])
+    gift_live = bool(gift and gift.get("live"))
+    points = [low, high]
+    if spot is not None:
+        points.append(spot)
+    if gift_px is not None:
+        points.append(gift_px)
+    cushion = max(sigma * 0.25, 8)
+    lo = min(points) - cushion
+    hi = max(points) + cushion
+    width, pad = 680, 28
+    span = hi - lo or 1
+
+    def sx(value: float) -> float:
+        return pad + (value - lo) / span * (width - 2 * pad)
+
+    def dot(mark_id: str, value: float | None, color: str) -> str:
+        if value is None:
+            return f"<circle id='{mark_id}' cx='{pad}' cy='78' r='6.5' fill='{color}' stroke='#fff' stroke-width='2' visibility='hidden'></circle>"
+        cy = "64" if mark_id == "spot-dot" else "100"
+        return (
+            f"<circle id='{mark_id}' cx='{sx(value):.1f}' cy='{cy}' r='6.5' "
+            f"fill='{color}' stroke='#fff' stroke-width='2'></circle>"
+        )
+
+    due = escape(_due_label(str(forecast.get("due") or "")))
+    gap = escape(str(forecast.get("gap") or "the next cash close"))
+    spot_text = "—" if spot is None else f"{spot:,.0f}"
+    gift_text = "—" if gift_px is None else f"{gift_px:,.0f}"
+    spot_on = spot_live and spot is not None
+    gift_on = gift_live and gift_px is not None
+    x0, x1, xa = sx(low), sx(high), sx(anchor)
+    return (
+        "<section class='range-top' aria-label='Next 24h close'>"
+        "<h2>Next 24h close</h2>"
+        f"<p class='expect'>{low:,.0f} – {high:,.0f}</p>"
+        f"<p class='due'>{due}, {gap}.</p>"
+        f"<svg id='range-board' viewBox='0 0 {width} 118' role='img' aria-label='Quoted band with Nifty and GIFT' "
+        f"data-lo='{lo:.4f}' data-hi='{hi:.4f}' data-pad='{pad}' data-width='{width}' "
+        f"data-anchor='{anchor:.4f}' data-sigma='{sigma:.4f}'>"
+        f"<rect id='band-shade' x='{x0:.1f}' y='70' width='{max(1.0, x1 - x0):.1f}' height='22' rx='6' fill='rgba(107,63,160,.22)'></rect>"
+        f"<line id='band-anchor' x1='{xa:.1f}' y1='58' x2='{xa:.1f}' y2='108' stroke='#1c1915' stroke-width='2'></line>"
+        f"<text id='range-low' x='{x0:.1f}' y='24' text-anchor='middle' fill='#4a453e' font-size='13' font-weight='600'>{low:,.0f}</text>"
+        f"<text id='range-high' x='{x1:.1f}' y='24' text-anchor='middle' fill='#4a453e' font-size='13' font-weight='600'>{high:,.0f}</text>"
+        f"<text id='range-anchor' x='{xa:.1f}' y='48' text-anchor='middle' fill='#746c62' font-size='11'>Last close</text>"
+        f"{dot('spot-dot', spot, '#0c7a3a')}"
+        f"{dot('gift-dot', gift_px, '#c47b12')}"
+        "</svg>"
+        "<p class='range-key'>"
+        f"<span><i class='swatch spot'></i> Nifty <b id='spot-read'>{spot_text}</b> "
+        f"<em id='spot-state' class='{'pill on' if spot_on else 'pill'}'>{'Live' if spot_on else 'Closed'}</em></span>"
+        f"<span><i class='swatch gift'></i> GIFT <b id='gift-read'>{gift_text}</b> "
+        f"<em id='gift-state' class='{'pill on' if gift_on else 'pill'}'>{'Live' if gift_on else 'Closed'}</em></span>"
+        "</p>"
+        "<p class='deck'>The shade is the quoted band for the next cash close. The marks are the latest Nifty and GIFT prints. They refresh while that market is live.</p>"
+        "</section>"
+    )
+
+
+def _session_html(forecast: dict | None) -> str:
+    if not forecast or forecast.get("sigma") in (None, 0):
+        return ""
+    anchor = float(forecast["anchor"])
+    mu = float(forecast["mu"])
+    sigma = float(forecast["sigma"])
+    low = anchor - sigma
+    high = anchor + sigma
+    due = _due_label(str(forecast.get("due") or ""))
+    gap = escape(str(forecast.get("gap") or "the next cash close"))
+    move_label = "Unchanged" if int(round(mu)) == 0 else impact_text(mu)
+    raw = float(forecast.get("raw") or 0)
+    rehearsal, live = _session_proofs(forecast.get("proof") or {}, raw, mu)
+    proof_html = _proof_block("Rehearsal", rehearsal) + _proof_block("Since this copy started", live)
+    drivers = "" if int(round(mu)) == 0 else _session_drivers(forecast.get("parts") or [])
+    trail = _strive_svg(forecast.get("trail") or [])
+    sides = " The band is centered on the last close, so the two sides are equal." if int(round(mu)) == 0 else ""
+    signed = "<p class='deck'>Author and critic both signed this call.</p>" if forecast.get("signed") else ""
+    return (
+        "<section class='session'>"
+        f"<h2>Next session <span class='impact {impact_class(mu)}' data-session='{mu:.1f}'>{move_label}</span></h2>"
+        f"<p class='due'>{escape(due)}, {gap}.</p>"
+        f"<p class='expect'>{anchor:,.0f}<small>{escape(_coverage_sentence(forecast.get('proof') or {}))} "
+        f"The band runs from {low:,.0f} to {high:,.0f}.{sides}</small></p>"
+        f"{_move_bell(anchor, sigma)}"
+        f"{drivers}"
+        "<p class='deck'>The printed center stays on the last close until 60 live closes beat a flat guess by 15 points.</p>"
+        f"{proof_html}"
+        f"{trail}"
+        "<p class='deck'>This is a probability, not a promise. The shade is the quoted band.</p>"
+        f"{signed}"
+        "</section>"
+    )
+
+
+def _coverage_sentence(proof: dict) -> str:
+    window = int(proof.get("window") or 0)
+    if window < 20:
+        return "The band needs a few dozen checked sessions before that share means much."
+    held = float(proof.get("band") or 0)
+    pct = round(held * 100)
+    sentence = f"The quoted band held {pct}% of the last {window} rehearsal calls."
+    if abs(held - band_mass()) <= 0.04:
+        sentence += " That is about 68%."
+    return sentence
+
+
+def _proof_block(title: str, lines: list[str]) -> str:
+    items = "".join(f"<li>{escape(line)}</li>" for line in lines)
+    return f"<p class='deck'>{escape(title)}</p><ul class='proof-list'>{items}</ul>"
+
+
+def _due_label(due: str) -> str:
+    try:
+        found = datetime.fromisoformat(due)
+    except ValueError:
+        return due or "Next cash close"
+    return f"{found:%A} {found.day} {found:%b}"
+
+
+def _session_drivers(parts: list) -> str:
+    shown = []
+    for row in parts:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        points = int(round(float(row[1])))
+        if points == 0:
+            continue
+        shown.append(
+            f"<span>{escape(str(row[0]))} <b class='{impact_class(points)}'>{impact_text(points)}</b></span>"
+        )
+    if not shown:
+        return ""
+    return "<div class='drivers'>" + "".join(shown) + "</div>"
+
+
+def _session_proofs(proof: dict, raw: float, mu: float) -> tuple[list[str], list[str]]:
+    studied = int(proof.get("studied") or 0)
+    window = int(proof.get("window") or 0)
+    rehearsal = [f"Studied {studied} sessions. Each call was made before that session’s close."]
+    if window >= 20:
+        rehearsal.append(
+            f"On the last {window}, the fit missed {float(proof.get('fit') or 0):.0f} points. "
+            f"A flat guess missed {float(proof.get('flat') or 0):.0f}. "
+            f"Repeating the last move missed {float(proof.get('momentum') or 0):.0f}."
+        )
+        rehearsal.append(_coverage_sentence(proof))
+    else:
+        rehearsal.append("The band needs a few dozen checked sessions before that share means much.")
+    if int(round(mu)) == 0 and abs(raw) >= 1:
+        rehearsal.append(f"An unused fit lean of {impact_text(raw)} was not the call.")
+    live_n = int(proof.get("live_n") or 0)
+    if live_n == 0:
+        live = ["No close has been checked."]
+    else:
+        live = [
+            f"{live_n} closes were checked, with a typical miss of {float(proof.get('live_mae') or 0):.0f}."
+        ]
+    return rehearsal, live
+
+
+def _move_bell(anchor: float, sigma: float) -> str:
+    center = anchor
+    width, height = 680, 210
+    pad, top, baseline = 28, 28, 148
+    lo = min(anchor, center - 3.2 * sigma)
+    hi = max(anchor, center + 3.2 * sigma)
+    span = hi - lo or 1
+
+    def sx(value: float) -> float:
+        return pad + (value - lo) / span * (width - 2 * pad)
+
+    peak = 1 / (sigma * math.sqrt(2 * math.pi))
+
+    def sy(density: float) -> float:
+        return top + (1 - density / peak) * (baseline - top)
+
+    pts = []
+    for step in range(97):
+        x = (center - 3.2 * sigma) + (6.4 * sigma) * step / 96
+        density = math.exp(-0.5 * ((x - center) / sigma) ** 2) / (sigma * math.sqrt(2 * math.pi))
+        pts.append(f"{sx(x):.1f},{sy(density):.1f}")
+    shade = []
+    for step in range(49):
+        x = (center - sigma) + (2 * sigma) * step / 48
+        density = math.exp(-0.5 * ((x - center) / sigma) ** 2) / (sigma * math.sqrt(2 * math.pi))
+        shade.append(f"{sx(x):.1f},{sy(density):.1f}")
+    edge = f"{sx(center - 3.2 * sigma):.1f},{baseline} "
+    close = f" {sx(center + 3.2 * sigma):.1f},{baseline}"
+    shade_edge = f"{sx(center - sigma):.1f},{baseline} "
+    shade_close = f" {sx(center + sigma):.1f},{baseline}"
+    parts = [
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Quoted band'>",
+        f"<polygon points='{edge}{' '.join(pts)}{close}' fill='#6b3fa0' fill-opacity='0.10' stroke='none'/>",
+        f"<polygon points='{shade_edge}{' '.join(shade)}{shade_close}' fill='#6b3fa0' fill-opacity='0.22' stroke='none'/>",
+        f"<polyline fill='none' stroke='#6b3fa0' stroke-width='2' points='{' '.join(pts)}'/>",
+    ]
+    marks = [(anchor, "#5e584f", f"Last close {_level_text(anchor)}")]
+    for value, color, name in marks:
+        x = sx(value)
+        parts.append(f"<line x1='{x:.1f}' y1='{top}' x2='{x:.1f}' y2='{baseline}' stroke='{color}' stroke-width='1.5'/>")
+        parts.append(f"<text x='{x:.1f}' y='{baseline + 16}' text-anchor='middle' font-size='11' fill='{color}'>{name}</text>")
+    parts.append(
+        f"<text x='{pad}' y='{baseline + 36}' font-size='11' fill='#746c62'>The shade is the quoted band.</text>"
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _strive_svg(trail: list) -> str:
+    rows = []
+    for row in trail:
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            rows.append((float(row[0]), float(row[1])))
+    if len(rows) < 2:
+        return ""
+    width, height = 680, 120
+    pad, top, bottom = 28, 16, 78
+    values = [item for pair in rows for item in pair]
+    lo, hi = min(values), max(values)
+    if hi - lo < 1:
+        hi = lo + 1
+    span = hi - lo
+
+    def sx(index: int) -> float:
+        return pad + index / (len(rows) - 1) * (width - 2 * pad)
+
+    def sy(value: float) -> float:
+        return top + (hi - value) / span * (bottom - top)
+
+    def line(index: int, color: str) -> str:
+        pts = " ".join(f"{sx(step):.1f},{sy(pair[index]):.1f}" for step, pair in enumerate(rows))
+        return f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{pts}'/>"
+
+    return (
+        "<svg viewBox='0 0 680 120' role='img' aria-label='Quoted band and the typical move'>"
+        f"{line(0, '#6b3fa0')}{line(1, '#9a9186')}"
+        f"<text x='{pad}' y='{bottom + 18}' font-size='11' fill='#6b3fa0'>Quoted band</text>"
+        f"<text x='{pad + 90}' y='{bottom + 18}' font-size='11' fill='#9a9186'>Typical move</text>"
+        f"<text x='{pad + 190}' y='{bottom + 18}' font-size='11' fill='#746c62'>40-session average.</text>"
+        "</svg>"
+    )
 
 
 def _ahead_html(ahead: dict | None) -> str:

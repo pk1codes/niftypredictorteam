@@ -13,7 +13,7 @@ from niftyteam.horizons import forecast_move, next_open, session_close, sessions
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
 from niftyteam.scout import agent_line, parse_google_feed, parse_results, query_for, scout_sentence
-from niftyteam.search import feed_items, parse_gift
+from niftyteam.search import feed_items, parse_gift, quote_is_live, quote_stamp
 from niftyteam.store import Store
 from niftyteam.tick import _fold_feed, _make_claim, _publish, _report_limits, _rescue_news, _scout, _still_names, accuracy_notes, items_for_feed, miss_titles
 
@@ -501,6 +501,14 @@ def test_gift_uses_near_month_future():
     assert quote["price"] == 23085
     assert quote["expiry"] == "27-Oct-2026"
     assert quote["change"] == -9.5
+    assert quote["asof"] == ""
+
+
+def test_a_fresh_print_counts_as_live():
+    now = datetime(2026, 10, 21, 22, 10, tzinfo=IST)
+    assert quote_is_live(quote_stamp("21-Oct-2026 22:09:50"), now)
+    assert not quote_is_live(quote_stamp("21-Oct-2026 15:30:00"), now)
+    assert quote_stamp("not a time") is None
 
 
 def test_learning_score_follows_the_later_miss():

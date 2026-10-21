@@ -1,0 +1,20 @@
+{
+  "ready": true,
+  "anchor": 22811.35,
+  "anchor_text": "22,811",
+  "anchor_day": "2026-10-21",
+  "due": "2026-10-22",
+  "due_label": "Thursday 22 Oct",
+  "gap": "about 24 hours after the last close",
+  "mu": 0.0,
+  "sigma": 137.97,
+  "low": 22673.379999999997,
+  "high": 22949.32,
+  "low_text": "22,673",
+  "high_text": "22,949",
+  "signed": true,
+  "coverage": "The quoted band held 66% of the last 80 rehearsal calls. That is about 68%.",
+  "center": "The printed center stays on the last close until 60 live closes beat a flat guess by 15 points.",
+  "record": "No close has been checked since this copy started.",
+  "signed_line": "Author and critic both signed this call."
+}
