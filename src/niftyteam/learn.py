@@ -4,16 +4,41 @@ from niftyteam.config import BOARD_AGENT, ROSTER
 from niftyteam.models import Claim, Ensemble
 
 
+PROVED_CLOSES = 4
+
+
 def learning_score(misses: list[float]) -> int | None:
     if len(misses) < 4:
         return None
-    half = len(misses) // 2
-    early = sum(abs(item) for item in misses[:half]) / half
-    late_rows = misses[half:]
-    late = sum(abs(item) for item in late_rows) / len(late_rows)
+    early, late = _miss_halves(misses)
     if early + late == 0:
         return 50
     return round(100 * early / (early + late))
+
+
+def learning_proof(misses: list[float], closes: list[int] | None = None) -> dict | None:
+    """The score, the two misses behind it, and whether enough closes back the word."""
+    score = learning_score(misses)
+    if score is None:
+        return None
+    early, late = _miss_halves(misses)
+    distinct = len(set(closes or []))
+    return {
+        "score": score,
+        "early": early,
+        "late": late,
+        "closes": distinct,
+        "proved": distinct >= PROVED_CLOSES,
+    }
+
+
+def _miss_halves(misses: list[float]) -> tuple[float, float]:
+    half = len(misses) // 2
+    early_rows = misses[:half]
+    late_rows = misses[half:]
+    early = sum(abs(item) for item in early_rows) / len(early_rows)
+    late = sum(abs(item) for item in late_rows) / len(late_rows)
+    return early, late
 
 
 def shift_trail(misses: list[float], keep: int = 8) -> list[float]:

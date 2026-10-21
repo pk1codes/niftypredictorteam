@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
 from niftyteam.estimate import news_shifts
 from niftyteam.horizons import next_open, session_close
-from niftyteam.learn import agent_misses, learning_score, learning_trail, shift_trail
+from niftyteam.learn import agent_misses, learning_proof, learning_score, learning_trail, shift_trail
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
 
@@ -149,6 +149,12 @@ def render_page(
   .gain-banner {{ padding: 0 14px 10px; }}
   .gain-read {{ margin: 0 0 2px; color: #3f3a34; font: 600 15px/1 ui-sans-serif, sans-serif; }}
   .gain-read strong {{ font-size: 28px; margin-right: 6px; letter-spacing: 0; }}
+  .proof {{ margin: 8px 0 2px; }}
+  .proof p {{ display: grid; grid-template-columns: 58px 42px 1fr; gap: 8px; align-items: center; margin: 5px 0; color: #3f3a34; font: 13px/1.2 ui-sans-serif, sans-serif; }}
+  .proof b {{ font-variant-numeric: tabular-nums; }}
+  .proof i {{ display: block; height: 8px; border-radius: 99px; background: #f3efe8; }}
+  .proof em {{ display: block; height: 8px; border-radius: 99px; background: #6b3fa0; }}
+  .proof-note {{ margin: 4px 0 8px; color: #5e584f; font: 13px/1.4 ui-sans-serif, sans-serif; }}
   .gain {{ font-weight: 650; font-variant-numeric: tabular-nums; }}
   .gain.up {{ color: #0c7a3a; }}
   .gain.down {{ color: #c62828; }}
@@ -970,7 +976,11 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     cards = []
     waiting = []
     for key, name in names:
-        row = _learn_row(name, series.get(key) or [])
+        board_proved = None
+        if key == BOARD_AGENT:
+            proof = learning_proof(series.get(key) or [], _session_closes(ensembles))
+            board_proved = bool(proof and proof["proved"])
+        row = _learn_row(name, series.get(key) or [], board_proved)
         if row:
             cards.append(row)
         else:
@@ -978,11 +988,12 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     wait = ""
     if waiting:
         wait = f"<p class='deck wait'>Not enough scores for {escape(', '.join(waiting))}.</p>"
-    banner = _gain_banner(series.get(BOARD_AGENT) or [])
+    banner = _gain_banner(series.get(BOARD_AGENT) or [], ensembles)
     return (
         "<section class='learn' id='learning'>"
         "<div class='roster-head'><span>Improving</span></div>"
-        "<p class='deck'>The line rises when later predictions miss by less. The grey line is 50, no change. "
+        "<p class='deck'>The line is this score. Above 50, the later miss is smaller. The grey line is 50, no change. "
+        "The word next to the score is used only after 4 different closes. "
         "Each card shows that score, then the points added to the next prediction. Above zero on the card, the agent has been too low.</p>"
         f"{banner}"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
@@ -997,27 +1008,80 @@ def _gain_kind(score: int) -> tuple[str, str]:
     return "Same", "flat"
 
 
-def _gain_banner(misses: list[float]) -> str:
+def _gain_banner(misses: list[float], ensembles: list[Ensemble]) -> str:
     trail = learning_trail(misses, keep=48)
     if not trail:
         return "<p class='deck wait'>The board line starts after 4 checked predictions.</p>"
-    word, kind = _gain_kind(trail[-1])
+    proof = learning_proof(misses, _session_closes(ensembles))
+    if proof is not None and proof["proved"]:
+        word, kind = _gain_kind(proof["score"])
+    else:
+        word, kind = "Not proved", "flat"
+    proof_html = "" if proof is None else _proof_html(proof)
     return (
         "<div class='gain-banner'>"
         f"<p class='gain-read'><strong class='gain {kind}'>{trail[-1]}</strong> {word}</p>"
-        f"{_gain_plot(trail)}</div>"
+        f"{proof_html}"
+        f"{_gain_plot(trail, proved=bool(proof and proof['proved']))}</div>"
     )
 
 
-def _gain_mark(misses: list[float]) -> str:
+def _session_closes(ensembles: list[Ensemble]) -> list[int]:
+    found = []
+    for row in ensembles:
+        if row.residual is None or row.horizon != "session":
+            continue
+        if row.nifty_level is None or row.actual is None:
+            continue
+        found.append(round(row.nifty_level + row.actual))
+    return found
+
+
+def _proof_html(proof: dict) -> str:
+    early = round(proof["early"])
+    late = round(proof["late"])
+    top = max(early, late, 1)
+    return (
+        "<div class='proof'>"
+        f"<p><span>Earlier</span><b>{early}</b><i><em style='width:{early / top * 100:.0f}%'></em></i></p>"
+        f"<p><span>Later</span><b>{late}</b><i><em style='width:{late / top * 100:.0f}%'></em></i></p>"
+        "</div>"
+        f"<p class='proof-note'>{escape(_proof_note(proof, early, late))}</p>"
+    )
+
+
+def _proof_note(proof: dict, early: int, late: int) -> str:
+    base = f"Earlier checks missed by {early} points. Later checks missed by {late}."
+    closes = proof["closes"]
+    if proof["proved"]:
+        if proof["score"] > 50:
+            change = "the later miss is smaller"
+        elif proof["score"] < 50:
+            change = "the later miss is larger"
+        else:
+            change = "the later miss is about the same"
+        return f"{base} {closes} different closes, so {change}."
+    if closes == 0:
+        hold = "No finished close is in this score yet."
+    elif closes == 1:
+        hold = "Only 1 close is in this score."
+    else:
+        hold = f"Only {closes} different closes are in this score."
+    return f"{base} {hold} The same close is counted again each hour, so this is not proved yet."
+
+
+def _gain_mark(misses: list[float], proved: bool | None = None) -> str:
     score = learning_score(misses)
     if score is None:
         return "<span class='gain'></span>"
-    _word, kind = _gain_kind(score)
+    if proved is False:
+        kind = "flat"
+    else:
+        _word, kind = _gain_kind(score)
     return f"<span class='gain {kind}'>{score}</span>"
 
 
-def _learn_row(name: str, misses: list[float]) -> str:
+def _learn_row(name: str, misses: list[float], proved: bool | None = None) -> str:
     trail = shift_trail(misses, keep=48)
     if not trail:
         return ""
@@ -1026,7 +1090,7 @@ def _learn_row(name: str, misses: list[float]) -> str:
     color = _LEARN_COLOR.get(name, "#4a453e")
     return (
         f"<div class='learn-card'><span class='name'>{escape(name)}</span>"
-        f"{_gain_mark(misses)}"
+        f"{_gain_mark(misses, proved if name == 'Board' else None)}"
         f"<span class='line {kind}'>{impact_text(shift)}</span>"
         f"{_learn_plot(trail, color)}</div>"
     )
@@ -1043,12 +1107,15 @@ def _gain_scale(scores: list[int]) -> tuple[float, float]:
     return lo - pad, hi + pad
 
 
-def _gain_plot(scores: list[int]) -> str:
+def _gain_plot(scores: list[int], proved: bool = True) -> str:
     width, height = 640, 96
     pad_x, pad_y = 12, 14
     lo, hi = _gain_scale(scores)
     latest = scores[-1]
-    color = "#0c7a3a" if latest > 50 else "#c62828" if latest < 50 else "#746c62"
+    if not proved:
+        color = "#746c62"
+    else:
+        color = "#0c7a3a" if latest > 50 else "#c62828" if latest < 50 else "#746c62"
 
     def sx(index: int) -> float:
         last = max(len(scores) - 1, 1)

@@ -8,7 +8,7 @@ from niftyteam.chart import _mover_total, render_page
 from niftyteam.config import impact_class, load_config
 from niftyteam.ensemble import adjust_sigma, apply_score, attributed_points, build_ensemble, claim_weight, learned_midpoint, next_sigma_floor
 from niftyteam.estimate import apply_family_bias, estimate_headline, family_bias, fit_move, fitted_move, gift_gap_estimate, headline_kind, judge_headline, level_estimate, news_shifts, oi_change_estimate, pcr_estimate, promoted_miss
-from niftyteam.learn import call_shift, learning_score, learning_trail
+from niftyteam.learn import call_shift, learning_proof, learning_score, learning_trail
 from niftyteam.horizons import forecast_move, next_open, session_close, sessions_ahead, week_move
 from niftyteam.models import Claim, Ensemble, Event, Source
 from niftyteam.pcr import option_book, parse_flows
@@ -511,6 +511,16 @@ def test_learning_score_follows_the_later_miss():
     assert learning_score(worse) < 50
     assert learning_trail(closer)[-1] == learning_score(closer)
     assert len(learning_trail(closer + closer)) <= 8
+    repeated = learning_proof(closer, [22889, 22889, 22889, 22889])
+    assert repeated["proved"] is False
+    assert repeated["closes"] == 1
+    proved = learning_proof(closer, [1, 2, 3, 4])
+    assert proved["proved"] is True
+    live = [-238, 66, -281, -270, -245, -220, -275, -271, 57, 44, 34, 55, 105, 4, 72, 3, -87, -94, -83, -162]
+    hourly = learning_proof(live, [22889] * 9 + [22963] * 4 + [22811] * 5)
+    assert hourly["score"] == 74
+    assert hourly["closes"] == 3
+    assert hourly["proved"] is False
 
 
 def test_open_and_session_clocks():
@@ -733,7 +743,7 @@ def test_learning_row_shows_the_next_shift():
     assert "+2" in row
 
 
-def _scored_rows(misses: list[float], beat: str = "global"):
+def _scored_rows(misses: list[float], beat: str = "global", closes: bool = False):
     now = datetime(2026, 10, 18, 15, tzinfo=IST)
     claims = []
     history = []
@@ -744,18 +754,23 @@ def _scored_rows(misses: list[float], beat: str = "global"):
         claim.residual = miss
         claim.ts = stamp
         claims.append(claim)
-        history.append(Ensemble(id=str(index), ts=stamp, mu=0, sigma=10, n_shocks=1, nifty_level=25000, residual=miss))
+        level = 20000 + index * 25 if closes else 25000
+        actual = 0.0 if closes else None
+        history.append(Ensemble(
+            id=str(index), ts=stamp, mu=0, sigma=10, n_shocks=1,
+            nifty_level=level, actual=actual, residual=miss,
+        ))
     return claims, history
 
 
 def test_improving_rises_when_later_misses_shrink():
     misses = [20, 20, 20, 20, 4, 4, 4, 4]
-    claims, history = _scored_rows(misses)
+    claims, history = _scored_rows(misses, closes=True)
     page = render_page(None, [], [], 25000, 8, history=history, claims=claims)
     score = learning_score(misses)
     assert score > 50
-    assert f"class='gain up'>{score}" in page
-    assert "Better" in page
+    assert f"class='gain up'>{score}</strong> Better" in page
+    assert "8 different closes, so the later miss is smaller." in page
     line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
     assert "stroke='#0c7a3a'" in line
     row = page.split(">World<", 1)[1].split("</svg>", 1)[0]
@@ -764,14 +779,28 @@ def test_improving_rises_when_later_misses_shrink():
 
 def test_improving_falls_when_later_misses_grow():
     misses = [4, 4, 4, 4, 20, 20, 20, 20]
-    _claims, history = _scored_rows(misses, beat="flows")
+    _claims, history = _scored_rows(misses, beat="flows", closes=True)
     page = render_page(None, [], [], 25000, 8, history=history)
     score = learning_score(misses)
     assert score < 50
-    assert f"class='gain down'>{score}" in page
-    assert "Worse" in page
+    assert f"class='gain down'>{score}</strong> Worse" in page
+    assert "8 different closes, so the later miss is larger." in page
     line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
     assert "stroke='#c62828'" in line
+
+
+def test_improving_stays_unproved_when_one_close_is_repeated():
+    misses = [20, 20, 20, 20, 4, 4, 4, 4]
+    _claims, history = _scored_rows(misses)
+    page = render_page(None, [], [], 25000, 8, history=history)
+    assert "Not proved" in page
+    assert ">20</b>" in page
+    assert ">4</b>" in page
+    assert "not proved yet" in page
+    assert "Better" not in page
+    assert "Worse" not in page
+    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
+    assert "stroke='#746c62'" in line
 
 
 def test_pulse_and_tijori_join_the_agent_feeds():
