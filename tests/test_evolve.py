@@ -203,24 +203,24 @@ def test_the_page_shows_the_bell_and_the_proofs():
     assert "prices.json" in page
     assert "id='spot-state' class='pill'>Closed" in page
     assert "id='gift-state' class='pill on'>Live" in page
-    assert "Next session" in page
+    assert "How this range was set" in page
     shared = public_forecast(view)
     assert shared["low_text"] == "24,850"
     assert shared["high_text"] == "25,150"
     assert shared["anchor_text"] == "25,000"
     assert shared["mu"] == 0
-    assert "held 66% of the last 80 rehearsal calls" in shared["coverage"]
+    assert "held 66 of the last 80 past checks" in shared["coverage"]
     assert "about 68%" in shared["coverage"]
     assert shared["signed_line"] == ""
     assert "data-session='0.0'" in page
-    assert "Quoted band" in page
-    assert "held 66% of the last 80 rehearsal calls" in page
+    assert "This range" in page
+    assert "held 66 of the last 80 past checks" in page
     assert "about 68%" in page
-    assert "flat guess" in page
+    assert "no change" in page
     assert "not a promise" in page
-    assert "An unused fit lean of +42 was not the call." in page
-    assert "Since this copy started" in page
-    assert "No close has been checked." in page
+    assert "A side sum pointed up 42 points. It is not part of the range." in page
+    assert "On this version" in page
+    assert "No close has been checked yet." in page
     assert "<h2>Next close" not in page
     assert "Before that caution" not in page
 

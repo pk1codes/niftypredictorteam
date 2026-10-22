@@ -44,7 +44,7 @@ def render_page(
     level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
     early = ""
     if scored < 30:
-        early = f"<p class='note'>Early days. {scored} predictions checked. The line settles after a few dozen checks, so treat it as a first look.</p>"
+        early = f"<p class='note'>Only {scored} checks so far. Treat the line below as a first look.</p>"
     status = _status(last_run)
     gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Traded outside India. A plus means the next open may be higher.")
     fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
@@ -55,10 +55,18 @@ def render_page(
     outlook = "" if session else _ahead_html(ahead)
     split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
     lead = (
-        "The bell is the next cash close. The rest of the board is this hour."
+        "The top card is the 3:30 pm close. Below that is this hour's news score."
         if session
-        else "One prediction for the 15:30 close. Green is up. Red is down."
+        else "One guess for the 3:30 pm close. Green is up. Red is down."
     )
+    hour_head = (
+        "<section class='hour' aria-label='This hour news score'>"
+        "<h2>This hour's news score</h2>"
+        "<p class='lead'>These points are not the 24-hour close.</p>"
+        if session
+        else ""
+    )
+    hour_foot = "</section>" if session else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -245,6 +253,7 @@ def render_page(
   .pill {{ margin-left: 4px; font-style: normal; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
   .pill.on {{ color: #0c7a3a; }}
   .session {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 12px; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  .hour > h2 {{ margin: 18px 0 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #4a453e; }}
   .session h2 {{ margin: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .session h2 .impact {{ letter-spacing: 0; font-size: 28px; }}
   .session .expect {{ margin: 8px 0 0; color: #1c1915; font: 600 32px/1.1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
@@ -276,6 +285,7 @@ def render_page(
   </header>
   {session}
   <p class="lead">{escape(lead)}</p>
+  {hour_head}
   {topline}
   <div class="stats">
     {gift_tile}
@@ -283,13 +293,14 @@ def render_page(
   </div>
   {early}
   {_feeds_html(feeds)}
-  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the price outside India. <span class="mark-next">Next</span> is this hour’s prediction. The shaded band is the usual range around the <span class="mark-mean">200-day average</span>. Faint lines are the previous three.</figcaption></figure>
+  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the price outside India. <span class="mark-next">Next</span> is this hour's news score, not the 24-hour close. The shaded band is the usual range around the <span class="mark-mean">200-day average</span>. Faint lines are the previous three.</figcaption></figure>
   {split}
   {_matters(events)}
-  <figure class="errors">{errors}<figcaption>Each dot is one past prediction, oldest on the left. Below zero, the prediction was too high. Above zero, it was too low. The dashed line is the average miss. The curve is the recent path of the close predictions.</figcaption></figure>
+  <figure class="errors">{errors}<figcaption>Each dot is one past hour's guess, oldest on the left. Below zero, the guess was too high. Above zero, it was too low. The dashed line is the average miss.</figcaption></figure>
   {log}
   {news}
   {learning}
+  {hour_foot}
 </main>
 <script>
 const lastRaw = document.getElementById("status").dataset.last;
@@ -303,7 +314,7 @@ function paint() {{
   const last = lastRaw ? Date.parse(lastRaw) : NaN;
   const alive = !Number.isNaN(last) && (now - last) < freshMs;
   light.className = alive ? "light on" : "light";
-  state.textContent = alive ? "Running" : "Idle";
+  state.textContent = alive ? "Fresh" : "";
   const ist = new Date(now + istShift);
   const boundary = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), ist.getUTCHours() + 1);
   const remain = Math.max(0, boundary - istShift - now);
@@ -395,9 +406,9 @@ def _feeds_html(feeds: list[dict] | None) -> str:
     summary = _feeds_summary(totals)
     summary_html = f"<p class='feed-read'>{summary}</p>" if summary else ""
     return (
-        "<section class='feeds' aria-label='Important feeds'>"
-        "<h2>Important feeds</h2>"
-        "<p class='deck'>A story is set aside only when it cannot move Nifty. The rest stay on watch. Points are added only when the story clearly says up or down.</p>"
+        "<section class='feeds' aria-label='Stories'>"
+        "<h2>Stories</h2>"
+        "<p class='deck'>A story is left out only when it cannot move Nifty. The rest are read. Points are added only when the story clearly says up or down.</p>"
         f"{summary_html}"
         f"<div class='feed-row'>{''.join(cards)}</div></section>"
     )
@@ -408,17 +419,18 @@ def _feeds_summary(totals: dict[str, int]) -> str:
     if total == 0:
         return ""
     if totals["used"]:
+        counted = "was counted" if totals["used"] == 1 else "were counted"
         lead = (
-            f"{totals['used']} of {total} went into the prediction, adding "
+            f"{totals['used']} of {total} {counted}, adding "
             f"<strong class='{impact_class(totals['points'])}'>{impact_text(totals['points'])}</strong>."
         )
     else:
-        lead = f"None of {total} stories went into the prediction."
+        lead = f"None of {total} stories were counted."
     rest = []
     if totals["watch"]:
-        rest.append(f"{totals['watch']} stayed on watch. No clear up or down.")
+        rest.append(f"{totals['watch']} were read, with no clear up or down.")
     if totals["aside"]:
-        rest.append(f"{totals['aside']} were set aside.")
+        rest.append(f"{totals['aside']} were left out.")
     return lead + (" " + " ".join(rest) if rest else "")
 
 
@@ -484,28 +496,28 @@ def _fate_bar(counts: dict[str, int]) -> str:
 def _fate_key(counts: dict[str, int]) -> str:
     if counts["used"]:
         kind = impact_class(counts["points"])
-        call = f"<strong class='{kind}'>{impact_text(counts['points'])}</strong> in the prediction"
+        call = f"<strong class='{kind}'>{impact_text(counts['points'])}</strong> counted"
         swatch = kind
     else:
-        call = "<strong>0</strong> in the prediction"
+        call = "<strong>0</strong> counted"
         swatch = "none"
     return (
         "<p class='fate-key'>"
         f"<span><i class='swatch {swatch}'></i>{call}</span>"
-        f"<span><i class='swatch watch'></i><strong>{counts['watch']}</strong> on watch</span>"
-        f"<span><i class='swatch aside'></i><strong>{counts['aside']}</strong> set aside</span>"
+        f"<span><i class='swatch watch'></i><strong>{counts['watch']}</strong> read, no clear up or down</span>"
+        f"<span><i class='swatch aside'></i><strong>{counts['aside']}</strong> left out</span>"
         "</p>"
     )
 
 
 def _used_group(rows: list[dict]) -> str:
     if not rows:
-        return "<div class='fate-group'><h3>In the prediction</h3><p class='quiet'>Nothing from this feed went into the prediction.</p></div>"
+        return "<div class='fate-group'><h3>Counted</h3><p class='quiet'>Nothing from this feed was counted.</p></div>"
     body = "".join(_used_row(row) for row in rows)
     return (
         "<div class='fate-group'>"
-        "<h3>In the prediction</h3>"
-        "<p class='fate-deck'>These stories clearly say up or down, so the points went into the prediction.</p>"
+        "<h3>Counted</h3>"
+        "<p class='fate-deck'>These stories clearly say up or down, so the points were counted.</p>"
         f"{body}</div>"
     )
 
@@ -524,7 +536,7 @@ def _used_row(row: dict) -> str:
 
 def _aside_group(rows: list[dict]) -> str:
     if not rows:
-        return "<div class='fate-group'><h3>Set aside</h3><p class='quiet'>Nothing was set aside.</p></div>"
+        return "<div class='fate-group'><h3>Left out</h3><p class='quiet'>Nothing was left out.</p></div>"
     body = "".join(
         "<div class='story aside'>"
         f"<span class='title'>{escape(row['title'])}<span class='why'>{escape(_plain(row['note']))}</span></span>"
@@ -533,8 +545,8 @@ def _aside_group(rows: list[dict]) -> str:
     )
     return (
         "<div class='fate-group'>"
-        "<h3>Set aside</h3>"
-        "<p class='fate-deck'>Kept out because the story cannot move Nifty.</p>"
+        "<h3>Left out</h3>"
+        "<p class='fate-deck'>Left out because the story cannot move Nifty.</p>"
         f"{body}</div>"
     )
 
@@ -547,7 +559,7 @@ def _watch_group(rows: list[dict]) -> str:
     )
     return (
         "<details class='watch-pile'>"
-        f"<summary>{len(rows)} on watch. No clear up or down, so no points.</summary>"
+        f"<summary>{len(rows)} read. No clear up or down, so no points.</summary>"
         f"{body}</details>"
     )
 
@@ -564,12 +576,12 @@ def _status(last_run: str | None) -> str:
         fresh = age.total_seconds() < 75 * 60
         stamp = escape(last_run)
     light = "light on" if fresh else "light"
-    word = "Running" if fresh else "Idle"
+    word = "Fresh" if fresh else ""
     return (
         f"<div class='status' id='status' data-last='{stamp}'>"
         f"<span class='{light}' id='light'></span>"
         f"<span class='state' id='state'>{word}</span>"
-        f"<span id='last-run'>Last run {escape(label)}</span>"
+        f"<span id='last-run'>Last refresh {escape(label)}</span>"
         f"<span id='next-run'>Next update</span>"
         f"</div>"
     )
@@ -608,9 +620,9 @@ def _topline(history: list[Ensemble], gift: dict | None, open_call: Ensemble | N
             "<div class='top-card'>"
             "<span>Last close</span>"
             "<div class='top-pair'>"
-            f"<p><b>{_level_text(called)}</b><small>predicted</small></p>"
+            f"<p><b>{_level_text(called)}</b><small>this hour guessed</small></p>"
             f"<p><b>{_level_text(landed)}</b><small>Nifty was</small></p>"
-            f"<p class='{impact_class(diff)}'><b>{impact_text(diff)}</b><small>diff</small></p>"
+            f"<p class='{impact_class(diff)}'><b>{impact_text(diff)}</b><small>{'too high' if diff < 0 else 'too low' if diff > 0 else 'same'}</small></p>"
             "</div></div>"
         )
         marks.append(("Predicted", called, "#6b3fa0"))
@@ -731,8 +743,8 @@ def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: flo
     body = "".join(stories)
     return (
         "<section class='compare' aria-label='Prediction against Nifty'>"
-        "<h2>Prediction</h2>"
-        "<p class='deck'>Last close first. Then the prediction still waiting.</p>"
+        "<h2>This hour's past guesses</h2>"
+        "<p class='deck'>These guesses come from the news score. They are not the 24-hour range.</p>"
         f"{body}"
         "</section>"
     )
@@ -751,8 +763,8 @@ def _scored_call(row: Ensemble) -> str:
         f"at {_bold(made_at)} on {_bold(made_on)}. "
         f"It predicted Nifty 50 would be {_bold(_level_text(predicted))} "
         f"at {_bold(due_at)} on {_bold(due_on)}. "
-        f"Nifty 50 was {_bold(_level_text(observed))} then "
-        f"({_deviation(observed - predicted)})."
+        f"Nifty 50 was {_bold(_level_text(observed))} then. "
+        f"{_miss_phrase(observed - predicted, live=False)}."
     )
 
 
@@ -772,8 +784,8 @@ def _open_call(row: Ensemble, nifty: float | None) -> str:
     if nifty is None:
         return sentence
     return (
-        f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))} "
-        f"({_deviation(nifty - predicted, 'off so far')})."
+        f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))}. "
+        f"{_miss_phrase(nifty - predicted, live=True)}."
     )
 
 
@@ -876,9 +888,18 @@ def _bold(text: str) -> str:
     return f"<strong>{escape(text)}</strong>"
 
 
-def _deviation(value: float, label: str = "off by") -> str:
-    kind = impact_class(value)
-    return f"{label} <strong class='{kind}'>{impact_text(value)}</strong>"
+def _miss_phrase(gap: float, live: bool) -> str:
+    points = abs(int(round(gap)))
+    kind = impact_class(gap)
+    if points == 0:
+        text = "So far the live index matches that guess" if live else "The guess matched the close"
+    elif live:
+        side = "under" if gap < 0 else "over"
+        text = f"So far the live index is {points} points {side} that guess"
+    else:
+        way = "too high" if gap < 0 else "too low"
+        text = f"The guess was {points} points {way}"
+    return f"<strong class='{kind}'>{text}</strong>"
 
 
 def _settled_calls(ensemble: Ensemble | None, history: list[Ensemble]) -> tuple[Ensemble | None, Ensemble | None]:
@@ -939,7 +960,6 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         )
 
     due = escape(_due_label(str(forecast.get("due") or "")))
-    gap = escape(str(forecast.get("gap") or "the next cash close"))
     spot_text = "—" if spot is None else f"{spot:,.0f}"
     gift_text = "—" if gift_px is None else f"{gift_px:,.0f}"
     spot_on = spot_live and spot is not None
@@ -949,8 +969,8 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         "<section class='range-top' aria-label='Next 24h close'>"
         "<h2>Next 24h close</h2>"
         f"<p class='expect'>{low:,.0f} – {high:,.0f}</p>"
-        f"<p class='due'>{due}, {gap}.</p>"
-        f"<svg id='range-board' viewBox='0 0 {width} 118' role='img' aria-label='Quoted band with Nifty and GIFT' "
+        f"<p class='due'>{due}, the 3:30 pm cash close.</p>"
+        f"<svg id='range-board' viewBox='0 0 {width} 118' role='img' aria-label='This range with Nifty and GIFT' "
         f"data-lo='{lo:.4f}' data-hi='{hi:.4f}' data-pad='{pad}' data-width='{width}' "
         f"data-anchor='{anchor:.4f}' data-sigma='{sigma:.4f}'>"
         f"<rect id='band-shade' x='{x0:.1f}' y='70' width='{max(1.0, x1 - x0):.1f}' height='22' rx='6' fill='rgba(107,63,160,.22)'></rect>"
@@ -967,7 +987,7 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         f"<span><i class='swatch gift'></i> GIFT <b id='gift-read'>{gift_text}</b> "
         f"<em id='gift-state' class='{'pill on' if gift_on else 'pill'}'>{'Live' if gift_on else 'Closed'}</em></span>"
         "</p>"
-        "<p class='deck'>The shade is the quoted band for the next cash close. The marks are the latest Nifty and GIFT prints. They refresh while that market is live.</p>"
+        "<p class='deck'>The shade is this range for the 3:30 pm close. The marks are the latest Nifty and GIFT prints. They refresh while that market is live.</p>"
         "</section>"
     )
 
@@ -981,27 +1001,26 @@ def _session_html(forecast: dict | None) -> str:
     low = anchor - sigma
     high = anchor + sigma
     due = _due_label(str(forecast.get("due") or ""))
-    gap = escape(str(forecast.get("gap") or "the next cash close"))
-    move_label = "Unchanged" if int(round(mu)) == 0 else impact_text(mu)
+    move_label = "No move added" if int(round(mu)) == 0 else impact_text(mu)
     raw = float(forecast.get("raw") or 0)
     rehearsal, live = _session_proofs(forecast.get("proof") or {}, raw, mu)
-    proof_html = _proof_block("Rehearsal", rehearsal) + _proof_block("Since this copy started", live)
+    proof_html = _proof_block("Past checks", rehearsal) + _proof_block("On this version", live)
     drivers = "" if int(round(mu)) == 0 else _session_drivers(forecast.get("parts") or [])
     trail = _strive_svg(forecast.get("trail") or [])
-    sides = " The band is centered on the last close, so the two sides are equal." if int(round(mu)) == 0 else ""
-    signed = "<p class='deck'>Author and critic both signed this call.</p>" if forecast.get("signed") else ""
+    sides = " The range is centered on the last close, so the two sides are equal." if int(round(mu)) == 0 else ""
+    signed = "<p class='deck'>The builder and a second reviewer both agreed to this range.</p>" if forecast.get("signed") else ""
     return (
         "<section class='session'>"
-        f"<h2>Next session <span class='impact {impact_class(mu)}' data-session='{mu:.1f}'>{move_label}</span></h2>"
-        f"<p class='due'>{escape(due)}, {gap}.</p>"
-        f"<p class='expect'>{anchor:,.0f}<small>{escape(_coverage_sentence(forecast.get('proof') or {}))} "
-        f"The band runs from {low:,.0f} to {high:,.0f}.{sides}</small></p>"
+        f"<h2>How this range was set <span class='impact {impact_class(mu)}' data-session='{mu:.1f}'>{move_label}</span></h2>"
+        f"<p class='due'>{escape(due)}, the 3:30 pm cash close.</p>"
+        f"<p class='deck'>Last close <strong>{anchor:,.0f}</strong>. "
+        f"The range runs from {low:,.0f} to {high:,.0f}.{sides}</p>"
         f"{_move_bell(anchor, sigma)}"
         f"{drivers}"
-        "<p class='deck'>The printed center stays on the last close until 60 live closes beat a flat guess by 15 points.</p>"
+        "<p class='deck'>The middle stays on the last close until 60 new closes beat a no-change guess by 15 points.</p>"
         f"{proof_html}"
         f"{trail}"
-        "<p class='deck'>This is a probability, not a promise. The shade is the quoted band.</p>"
+        "<p class='deck'>This is a probability, not a promise. The shade is this range.</p>"
         f"{signed}"
         "</section>"
     )
@@ -1010,10 +1029,10 @@ def _session_html(forecast: dict | None) -> str:
 def _coverage_sentence(proof: dict) -> str:
     window = int(proof.get("window") or 0)
     if window < 20:
-        return "The band needs a few dozen checked sessions before that share means much."
+        return "This range needs a few dozen checked closes before that share means much."
     held = float(proof.get("band") or 0)
     pct = round(held * 100)
-    sentence = f"The quoted band held {pct}% of the last {window} rehearsal calls."
+    sentence = f"This range held {pct} of the last {window} past checks."
     if abs(held - band_mass()) <= 0.04:
         sentence += " That is about 68%."
     return sentence
@@ -1051,21 +1070,22 @@ def _session_drivers(parts: list) -> str:
 def _session_proofs(proof: dict, raw: float, mu: float) -> tuple[list[str], list[str]]:
     studied = int(proof.get("studied") or 0)
     window = int(proof.get("window") or 0)
-    rehearsal = [f"Studied {studied} sessions. Each call was made before that session’s close."]
+    rehearsal = [f"Checked {studied:,} past closes. Each call was made before that close."]
     if window >= 20:
         rehearsal.append(
-            f"On the last {window}, the fit missed {float(proof.get('fit') or 0):.0f} points. "
-            f"A flat guess missed {float(proof.get('flat') or 0):.0f}. "
+            f"The calculation missed {float(proof.get('fit') or 0):.0f} points. "
+            f"Guessing \"no change\" missed {float(proof.get('flat') or 0):.0f}. "
             f"Repeating the last move missed {float(proof.get('momentum') or 0):.0f}."
         )
         rehearsal.append(_coverage_sentence(proof))
     else:
-        rehearsal.append("The band needs a few dozen checked sessions before that share means much.")
+        rehearsal.append("This range needs a few dozen checked closes before that share means much.")
     if int(round(mu)) == 0 and abs(raw) >= 1:
-        rehearsal.append(f"An unused fit lean of {impact_text(raw)} was not the call.")
+        way = "up" if raw > 0 else "down"
+        rehearsal.append(f"A side sum pointed {way} {abs(int(round(raw)))} points. It is not part of the range.")
     live_n = int(proof.get("live_n") or 0)
     if live_n == 0:
-        live = ["No close has been checked."]
+        live = ["No close has been checked yet."]
     else:
         live = [
             f"{live_n} closes were checked, with a typical miss of {float(proof.get('live_mae') or 0):.0f}."
@@ -1104,7 +1124,7 @@ def _move_bell(anchor: float, sigma: float) -> str:
     shade_edge = f"{sx(center - sigma):.1f},{baseline} "
     shade_close = f" {sx(center + sigma):.1f},{baseline}"
     parts = [
-        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='Quoted band'>",
+        f"<svg viewBox='0 0 {width} {height}' role='img' aria-label='This range'>",
         f"<polygon points='{edge}{' '.join(pts)}{close}' fill='#6b3fa0' fill-opacity='0.10' stroke='none'/>",
         f"<polygon points='{shade_edge}{' '.join(shade)}{shade_close}' fill='#6b3fa0' fill-opacity='0.22' stroke='none'/>",
         f"<polyline fill='none' stroke='#6b3fa0' stroke-width='2' points='{' '.join(pts)}'/>",
@@ -1115,7 +1135,7 @@ def _move_bell(anchor: float, sigma: float) -> str:
         parts.append(f"<line x1='{x:.1f}' y1='{top}' x2='{x:.1f}' y2='{baseline}' stroke='{color}' stroke-width='1.5'/>")
         parts.append(f"<text x='{x:.1f}' y='{baseline + 16}' text-anchor='middle' font-size='11' fill='{color}'>{name}</text>")
     parts.append(
-        f"<text x='{pad}' y='{baseline + 36}' font-size='11' fill='#746c62'>The shade is the quoted band.</text>"
+        f"<text x='{pad}' y='{baseline + 36}' font-size='11' fill='#746c62'>The shade is this range.</text>"
     )
     parts.append("</svg>")
     return "".join(parts)
@@ -1147,11 +1167,11 @@ def _strive_svg(trail: list) -> str:
         return f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{pts}'/>"
 
     return (
-        "<svg viewBox='0 0 680 120' role='img' aria-label='Quoted band and the typical move'>"
+        "<svg viewBox='0 0 680 120' role='img' aria-label='This range and the usual move'>"
         f"{line(0, '#6b3fa0')}{line(1, '#9a9186')}"
-        f"<text x='{pad}' y='{bottom + 18}' font-size='11' fill='#6b3fa0'>Quoted band</text>"
-        f"<text x='{pad + 90}' y='{bottom + 18}' font-size='11' fill='#9a9186'>Typical move</text>"
-        f"<text x='{pad + 190}' y='{bottom + 18}' font-size='11' fill='#746c62'>40-session average.</text>"
+        f"<text x='{pad}' y='{bottom + 18}' font-size='11' fill='#6b3fa0'>This range</text>"
+        f"<text x='{pad + 90}' y='{bottom + 18}' font-size='11' fill='#9a9186'>Usual move</text>"
+        f"<text x='{pad + 180}' y='{bottom + 18}' font-size='11' fill='#746c62'>Average over 40 closes.</text>"
         "</svg>"
     )
 
@@ -1222,11 +1242,11 @@ def _matters(events: list[Event]) -> str:
     watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
     return (
         "<div class='matters'>"
-        f"<section><h2>Moving the prediction{_mover_total(moving)}</h2>"
-        "<p class='deck'>Points these stories added to the prediction. Bigger numbers moved it more.</p>"
+        f"<section><h2>What moved this hour{_mover_total(moving)}</h2>"
+        "<p class='deck'>Points these stories added to this hour's score. Bigger numbers moved it more.</p>"
         f"{move_html}</section>"
-        f"<section><h2>Quiet or stuck</h2>"
-        "<p class='deck'>Amber is waiting. Red had no answer. Neither is in the number.</p>"
+        f"<section><h2>No clear story</h2>"
+        "<p class='deck'>Amber is waiting. Red had no answer. Neither is in this hour's number.</p>"
         f"{watch_html}</section>"
         "</div>"
     )
@@ -1277,7 +1297,7 @@ def _activity(events: list[Event], feeds: list[dict] | None = None) -> str:
     return (
         "<section class='roster'>"
         f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
-        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how the prediction was made.</p>"
+        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how this hour's score was made.</p>"
         f"{_roster_rows(latest)}{score_html}<p class='how'>{escape(story)}</p>{trail}"
         "</section>"
     )
@@ -1299,25 +1319,24 @@ _LEARN_COLOR = {
 def _news(families: list[tuple[str, int, float]]) -> str:
     heavier, lighter = news_shifts(families)
     if not heavier and not lighter:
-        body = "<p class='deck wait'>Headline weights start after a story is checked.</p>"
+        body = "<p class='deck wait'>These weights start after a story is checked.</p>"
     else:
         body = (
             "<div class='news-cols'>"
-            f"{_news_col('Heavier', heavier)}"
-            f"{_news_col('Lighter', lighter)}"
+            f"{_news_col('Stories that have counted for more', heavier, 'heavier')}"
+            f"{_news_col('Stories that have counted for less', lighter, 'lighter')}"
             "</div>"
         )
     return (
         "<section class='news' id='news'>"
         "<div class='roster-head'><span>News</span></div>"
-        "<p class='deck'>Heavier means that kind of headline pulls the prediction harder than when it started. "
-        "Lighter means those points were cut. The number is the points added or removed.</p>"
+        "<p class='deck'>These are old weights, not today's news. "
+        "A bigger number means that kind of story has moved the hour's score by more points.</p>"
         f"{body}</section>"
     )
 
 
-def _news_col(title: str, rows: list[dict]) -> str:
-    kind = "heavier" if title == "Heavier" else "lighter"
+def _news_col(title: str, rows: list[dict], kind: str) -> str:
     if not rows:
         lines = "<p class='quiet'>None yet.</p>"
     else:
@@ -1350,10 +1369,10 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     banner = _gain_banner(series.get(BOARD_AGENT) or [], ensembles)
     return (
         "<section class='learn' id='learning'>"
-        "<div class='roster-head'><span>Improving</span></div>"
+        "<div class='roster-head'><span>Later checks</span></div>"
         "<p class='deck'>The line is this score. Above 50, the later miss is smaller. The grey line is 50, no change. "
         "The word next to the score is used only after 4 different closes. "
-        "Each card shows that score, then the points added to the next prediction. Above zero on the card, the agent has been too low.</p>"
+        "Each card shows that score, then the points added to this hour's score. Above zero on the card, the row has been too low.</p>"
         f"{banner}"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
@@ -1370,12 +1389,12 @@ def _gain_kind(score: int) -> tuple[str, str]:
 def _gain_banner(misses: list[float], ensembles: list[Ensemble]) -> str:
     trail = learning_trail(misses, keep=48)
     if not trail:
-        return "<p class='deck wait'>The board line starts after 4 checked predictions.</p>"
+        return "<p class='deck wait'>The board line starts after 4 checked guesses.</p>"
     proof = learning_proof(misses, _session_closes(ensembles))
     if proof is not None and proof["proved"]:
         word, kind = _gain_kind(proof["score"])
     else:
-        word, kind = "Not proved", "flat"
+        word, kind = "Too few closes", "flat"
     proof_html = "" if proof is None else _proof_html(proof)
     return (
         "<div class='gain-banner'>"
@@ -1426,7 +1445,7 @@ def _proof_note(proof: dict, early: int, late: int) -> str:
         hold = "Only 1 close is in this score."
     else:
         hold = f"Only {closes} different closes are in this score."
-    return f"{base} {hold} The same close is counted again each hour, so this is not proved yet."
+    return f"{base} {hold} The same close is counted again each hour, so this is too soon to trust."
 
 
 def _gain_mark(misses: list[float], proved: bool | None = None) -> str:
@@ -1546,6 +1565,10 @@ def _row_kind(sentence: str) -> str:
 
 
 def _plain(text: str) -> str:
+    if text == "Quiet":
+        return "No clear story"
+    if text == "Market shut":
+        return "Market was closed"
     return (
         text.replace("Scored the session call", "Checked the close prediction")
         .replace("Scored the open call", "Checked the open prediction")
@@ -1584,7 +1607,7 @@ def _trail_line(stamp: str, events: list[Event]) -> str:
     mean = "—"
     if board is not None and board.sentence not in STATUS_LINES:
         mean = impact_text(board.impact)
-    summary = f"{when} · {_checked(events)} of 8 · prediction {mean}"
+    summary = f"{when} · {_checked(events)} of 8 · score {mean}"
     return f"<p class='trail'>{escape(summary)}. {escape(_call_story(events))}</p>"
 
 
@@ -1611,14 +1634,18 @@ def _call_story(events: list[Event], feeds: list[dict] | None = None) -> str:
             moved.append(f"{name} reported: {sentence.rstrip('.')}.")
     board = found.get(BOARD_AGENT)
     if board is not None and board.sentence not in STATUS_LINES:
-        parts = [f"The prediction was {impact_text(board.impact)}."]
+        parts = [f"The score this hour was {impact_text(board.impact)}."]
     else:
         parts = ["No prediction this hour."]
     parts.extend(moved)
     if quiet:
-        parts.append(f"{_name_list(quiet)} was quiet." if len(quiet) == 1 else f"{_name_list(quiet)} were quiet.")
+        parts.append(
+            f"{_name_list(quiet)} had no clear story."
+            if len(quiet) == 1
+            else f"{_name_list(quiet)} had no clear story."
+        )
     if shut:
-        parts.append(f"{_name_list(shut)} found the market shut.")
+        parts.append(f"{_name_list(shut)} found the market was closed.")
     if stuck:
         parts.append(f"{_name_list(stuck)} had no answer.")
     score = found.get(SCORE_AGENT)
@@ -1647,7 +1674,7 @@ def _feed_story(feeds: list[dict] | None) -> str:
         if lines:
             used = sum("In the call" in line or "In the prediction" in line or line.startswith("Kept,") or "Kept," in line for line in lines)
             aside = sum("not an event" in line or "cannot" in line or "heavyweights" in line or "cinema" in line or "lifestyle" in line for line in lines)
-            bits.append(f"{label} read {len(lines)} stories. {used} kept. {aside} set aside.")
+            bits.append(f"{label} read {len(lines)} stories. {used} counted. {aside} left out.")
         else:
             detail = str(row.get("detail") or "").strip().rstrip(".")
             if detail:
@@ -1874,7 +1901,7 @@ def _forecast_svg(
             bell(mean, spread, fade)
     else:
         parts.append(
-            f"<text x='{pad}' y='{baseline - 16}' fill='#746c62' font-size='12'>The band starts after two predictions.</text>"
+            f"<text x='{pad}' y='{baseline - 16}' fill='#746c62' font-size='12'>The line starts after two guesses.</text>"
         )
     for name, value, color in markers:
         x = sx(value)
@@ -1957,9 +1984,9 @@ def _error_readout(rows: list[Ensemble]) -> str:
 def _bias_phrase(mean: float) -> str:
     points = abs(int(round(mean)))
     if points == 0:
-        return "On average the prediction matched Nifty."
+        return "On average the guess matched Nifty."
     side = "above" if mean < 0 else "below"
-    return f"On average the prediction sat {points} points {side} Nifty."
+    return f"On average the guess sat {points} points {side} Nifty."
 
 
 def _trend_phrase(values: list[float]) -> str:
@@ -1969,15 +1996,15 @@ def _trend_phrase(values: list[float]) -> str:
     early = sum(values[:cut]) / cut
     late = sum(values[-cut:]) / cut
     if abs(late) + 20 < abs(early):
-        text = "Later predictions miss by less."
+        text = "Later guesses miss by less."
     elif abs(late) > abs(early) + 20:
-        text = "Later predictions miss by more."
+        text = "Later guesses miss by more."
     else:
-        text = "Later predictions miss by about the same."
+        text = "Later guesses miss by about the same."
     if early <= -10 and late >= 10:
-        return "Later predictions now finish above Nifty."
+        return "Later guesses now finish above Nifty."
     if early >= 10 and late <= -10:
-        return "Later predictions now finish below Nifty."
+        return "Later guesses now finish below Nifty."
     return text
 
 
@@ -1993,7 +2020,7 @@ def _same_close_note(rows: list[Ensemble]) -> str:
     count = levels.count(top)
     if count < 3 or count * 2 <= len(rows):
         return ""
-    return f"{count} of these predictions were checked against one close, {_level_text(top)}."
+    return f"{count} of these guesses were checked against one close, {_level_text(top)}."
 
 
 def _miss_ticks(lo: float, hi: float) -> list[float]:

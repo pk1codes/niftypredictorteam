@@ -117,17 +117,17 @@ def public_forecast(view: dict | None) -> dict | None:
         due_label = due or "Next cash close"
     window = int(proof.get("window") or 0)
     if window < 20:
-        coverage = "The band needs a few dozen checked sessions before that share means much."
+        coverage = "This range needs a few dozen checked closes before that share means much."
     else:
         held = float(proof.get("band") or 0)
-        coverage = f"The quoted band held {round(held * 100)}% of the last {window} rehearsal calls."
+        coverage = f"This range held {round(held * 100)} of the last {window} past checks."
         if abs(held - band_mass()) <= 0.04:
             coverage += " That is about 68%."
     live_n = int(proof.get("live_n") or 0)
     if live_n == 0:
-        record = "No close has been checked since this copy started."
+        record = "On this version, no close has been checked yet."
     else:
-        record = f"{live_n} closes were checked, with a typical miss of {float(proof.get('live_mae') or 0):.0f}."
+        record = f"On this version, {live_n} closes were checked, with a typical miss of {float(proof.get('live_mae') or 0):.0f}."
     low = anchor - sigma
     high = anchor + sigma
     return {
@@ -146,9 +146,9 @@ def public_forecast(view: dict | None) -> dict | None:
         "high_text": f"{high:,.0f}",
         "signed": bool(view.get("signed")),
         "coverage": coverage,
-        "center": "The printed center stays on the last close until 60 live closes beat a flat guess by 15 points.",
+        "center": "The middle stays on the last close until 60 new closes beat a no-change guess by 15 points.",
         "record": record,
-        "signed_line": "Author and critic both signed this call." if view.get("signed") else "",
+        "signed_line": "The builder and a second reviewer both agreed to this range." if view.get("signed") else "",
     }
 
 

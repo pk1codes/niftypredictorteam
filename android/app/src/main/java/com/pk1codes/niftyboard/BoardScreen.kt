@@ -138,7 +138,7 @@ private fun RangeCard(forecast: Forecast, marks: Marks) {
             }
             Spacer(Modifier.height(14.dp))
             Text(
-                "The shade is the quoted band. Green is Nifty. Amber is GIFT. They move while that market is live.",
+                "The shade is this range. Green is Nifty. Amber is GIFT. They move while that market is live.",
                 color = Mute,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
