@@ -562,10 +562,30 @@ def _clean(rows: list[tuple[str, float]]) -> list[tuple[str, float]]:
     return sorted(folded.items())
 
 
+def last_closed_day(stamp: datetime) -> str:
+    """The newest cash day whose 3:30 has already passed."""
+    day = stamp.date()
+    clock = stamp.timetz().replace(tzinfo=None)
+    if day.weekday() >= 5 or clock < time(15, 30):
+        day -= timedelta(days=1)
+        while day.weekday() >= 5:
+            day -= timedelta(days=1)
+    return day.isoformat()
+
+
+def needs_fresh_bars(last_day: str, fetched_day: str, stamp: datetime) -> bool:
+    """True when today's file is missing, or it was saved before the latest close."""
+    if not last_day or fetched_day != stamp.date().isoformat():
+        return True
+    return last_day < last_closed_day(stamp)
+
+
 def _stale(store, stamp: datetime) -> bool:
     if any(len(store.evolve_bars(name)) < 80 for name in YAHOO):
         return True
-    return store.meta("evolve_fetched") != stamp.date().isoformat()
+    rows = store.evolve_bars("nifty")
+    last = rows[-1][0] if rows else ""
+    return needs_fresh_bars(last, store.meta("evolve_fetched") or "", stamp)
 
 
 def _fetch_books() -> dict[str, list[tuple[str, float]]]:

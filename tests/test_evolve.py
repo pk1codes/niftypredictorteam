@@ -13,6 +13,8 @@ from niftyteam.evolve import (
     feature_row,
     gap_phrase,
     live_ready,
+    last_closed_day,
+    needs_fresh_bars,
     next_session,
     publish,
     replay,
@@ -99,6 +101,20 @@ def test_shaded_band_is_the_normal_middle():
     assert band_mass() == pytest.approx(0.6827, abs=0.001)
     assert up_chance(0, 100) == pytest.approx(0.5, abs=0.001)
     assert up_chance(100, 100) > 0.8
+
+
+def test_a_file_saved_before_the_close_is_fetched_again():
+    friday = datetime(2026, 10, 30, 22, 37, tzinfo=IST)
+    assert last_closed_day(friday) == "2026-10-30"
+    assert needs_fresh_bars("2026-10-28", "2026-10-30", friday) is True
+    assert needs_fresh_bars("2026-10-30", "2026-10-30", friday) is False
+    morning = datetime(2026, 10, 30, 11, tzinfo=IST)
+    assert last_closed_day(morning) == "2026-10-29"
+    assert needs_fresh_bars("2026-10-29", "2026-10-30", morning) is False
+    monday = datetime(2026, 11, 2, 10, tzinfo=IST)
+    assert last_closed_day(monday) == "2026-10-30"
+    assert needs_fresh_bars("2026-10-29", "2026-11-02", monday) is True
+    assert needs_fresh_bars("2026-10-30", "2026-11-02", monday) is False
 
 
 def test_an_open_session_is_not_the_anchor_and_friday_points_at_monday():
