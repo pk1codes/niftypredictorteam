@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime, time
 
-from niftyteam.evolve import LIVE_COUNT, band_mass
+from niftyteam.evolve import LIVE_COUNT, band_mass, range_coverage, shown_half
 
 
 def digest(view: dict) -> str:
@@ -62,8 +62,8 @@ def author_review(view: dict | None) -> dict:
 
 
 def presentable(candidate, author, critic, signed, stamp: datetime):
-    """Return the call both just signed, or the last signed call that is still open."""
-    if _both(candidate, author, critic):
+    """Return a signed call only while its 3:30 is still ahead."""
+    if _both(candidate, author, critic) and still_open(candidate, stamp):
         return candidate
     if signed and still_open(signed, stamp):
         return signed
@@ -115,21 +115,16 @@ def public_forecast(view: dict | None) -> dict | None:
         due_label = f"{found:%A} {found.day} {found:%b}"
     except ValueError:
         due_label = due or "Next cash close"
-    window = int(proof.get("window") or 0)
-    if window < 20:
-        coverage = "This range needs a few dozen checked closes before that share means much."
-    else:
-        held = float(proof.get("band") or 0)
-        coverage = f"This range held {round(held * 100)} of the last {window} past checks."
-        if abs(held - band_mass()) <= 0.04:
-            coverage += " That is about 68%."
+    coverage = range_coverage(proof)
     live_n = int(proof.get("live_n") or 0)
     if live_n == 0:
         record = "On this version, no close has been checked yet."
     else:
         record = f"On this version, {live_n} closes were checked, with a typical miss of {float(proof.get('live_mae') or 0):.0f}."
-    low = anchor - sigma
-    high = anchor + sigma
+    half = shown_half(proof, sigma)
+    mu = float(view.get("mu") or 0)
+    low = anchor + mu - half
+    high = anchor + mu + half
     return {
         "ready": True,
         "anchor": anchor,
@@ -170,6 +165,30 @@ def presented(store, stamp: datetime) -> dict | None:
     shown = dict(view)
     shown["signed"] = True
     return shown
+
+
+def display_close(store, stamp: datetime, fetch=None, look: bool = False) -> dict | None:
+    """Signed call while its 3:30 is ahead. If that call is old, a fresh study can be shown."""
+    shown = presented(store, stamp)
+    if shown is not None:
+        return shown
+    if look:
+        from niftyteam.evolve import run_evolve
+
+        try:
+            run_evolve(store, stamp, fetch=fetch)
+        except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError):
+            pass
+    from niftyteam.evolve import evolve_view
+
+    view = evolve_view(store)
+    if not view or not still_open(view, stamp):
+        return None
+    if author_review(view)["verdict"] != "agree":
+        return None
+    found = dict(view)
+    found["signed"] = False
+    return found
 
 
 def _both(view, author, critic) -> bool:

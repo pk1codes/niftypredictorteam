@@ -76,6 +76,43 @@ def band_mass() -> float:
     return math.erf(1.0 / math.sqrt(2.0))
 
 
+def counted_width(misses: list[float], level: float = 0.90) -> tuple[float, float]:
+    """Smallest half-width that held at least `level` of these misses, and that share."""
+    ordered = sorted(abs(float(miss)) for miss in misses)
+    count = len(ordered)
+    if count == 0:
+        return 0.0, 0.0
+    need = min(count, max(1, math.ceil(level * count)))
+    half = ordered[need - 1]
+    share = sum(1 for miss in ordered if miss <= half) / count
+    return half, share
+
+
+def shown_half(proof: dict | None, sigma: float) -> float:
+    """Half-width of the range on the page. Prefer the counted 90% band."""
+    proof = proof or {}
+    wide = proof.get("wide")
+    share = proof.get("wide_share")
+    if wide and share is not None and float(share) >= 0.90 and int(proof.get("window") or 0) >= 20:
+        return float(wide)
+    return float(sigma)
+
+
+def range_coverage(proof: dict | None) -> str:
+    proof = proof or {}
+    window = int(proof.get("window") or 0)
+    if window < 20:
+        return "This range needs a few dozen checked closes before that share means much."
+    share = proof.get("wide_share")
+    if proof.get("wide") and share is not None and float(share) >= 0.90:
+        return f"{round(float(share) * 100)}% of the last {window} past checks finished inside a range this wide."
+    held = float(proof.get("band") or 0)
+    sentence = f"This range held {round(held * 100)} of the last {window} past checks."
+    if abs(held - band_mass()) <= 0.04:
+        sentence += " That is about 68%."
+    return sentence
+
+
 def coverage_scale(pairs: list[tuple[float, float]]) -> float:
     """Multiplier, from past misses only, that puts about 68% of them inside the band."""
     usable = [(abs(err), sigma) for err, sigma in pairs if sigma > 0]
@@ -473,6 +510,7 @@ def _proof(fitted: list[dict], live_from: str) -> dict:
     live_mae = None
     if live:
         live_mae = _avg(live, lambda row: abs(row["actual"] - row["published"]))
+    wide, wide_share = counted_width([abs(row["actual"] - row["published"]) for row in window])
     return {
         "studied": len(fitted),
         "window": count,
@@ -481,6 +519,8 @@ def _proof(fitted: list[dict], live_from: str) -> dict:
         "flat": round(_avg(window, lambda row: abs(row["actual"])), 1),
         "momentum": round(_avg(window, lambda row: abs(row["actual"] - row["x0"])), 1),
         "band": round(sum(1 for row in window if abs(row["actual"] - row["published"]) <= row["sigma"]) / count, 3),
+        "wide": round(wide, 2),
+        "wide_share": round(wide_share, 3),
         "direction": None if direction is None else round(direction, 3),
         "direction_n": len(leans),
         "earlier": None if earlier is None else round(earlier, 1),

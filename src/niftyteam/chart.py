@@ -6,11 +6,12 @@ from html import escape
 
 from datetime import datetime, timedelta
 
-from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text
+from niftyteam.config import BEAT_LABELS, BOARD_AGENT, BOSS_AGENT, MISSED_LINES, ROSTER, SCORE_AGENT, STATUS_LINES, impact_class, impact_text, now_ist
 from niftyteam.estimate import news_shifts
-from niftyteam.evolve import band_mass
+from niftyteam.evolve import range_coverage, shown_half
 from niftyteam.horizons import next_open, session_close
 from niftyteam.learn import agent_misses, learning_proof, learning_score, learning_trail, shift_trail
+from niftyteam.signoff import still_open
 from niftyteam.models import Claim, Ensemble, Event, parse_ts
 
 
@@ -35,53 +36,30 @@ def render_page(
     *,
     spot_live: bool = False,
 ) -> str:
-    gift_price = None if gift is None else gift.get("price")
-    current = _current_chart(ensemble, nifty, gift_price, history, last_run)
-    errors = _error_chart(residuals, history or [])
-    log = _activity(events, feeds)
-    learning = _learning(claims or [], history or [])
-    news = _news(families or [])
-    level = f"Nifty {nifty:,.0f}" if nifty else "Nifty price pending"
-    early = ""
-    if scored < 30:
-        early = f"<p class='note'>Only {scored} checks so far. Treat the line below as a first look.</p>"
     status = _status(last_run)
-    gift_tile = _quote_tile("GIFT Nifty", None if gift is None else gift["price"], None if gift is None else gift["change"], points=True, hint="Traded outside India. A plus means the next open may be higher.")
-    fii_tile = _quote_tile("FII net", fii_net, fii_net, suffix=" cr", hint="Foreign money, in crore. Plus is buying.")
-    called = _compare_html(ensemble, history or [], nifty)
-    topline = _topline(history or [], gift, open_call)
-    session = _session_html(forecast)
-    range_board = _range_board(forecast, nifty, gift, spot_live)
-    outlook = "" if session else _ahead_html(ahead)
-    split = f"<div class='split'>{called}{outlook}</div>" if called or outlook else ""
-    lead = (
-        "The top card is the 3:30 pm close. Below that is this hour's news score."
-        if session
-        else "One guess for the 3:30 pm close. Green is up. Red is down."
-    )
-    hour_head = (
-        "<section class='hour' aria-label='This hour news score'>"
-        "<h2>This hour's news score</h2>"
-        "<p class='lead'>These points are not the 24-hour close.</p>"
-        if session
-        else ""
-    )
-    hour_foot = "</section>" if session else ""
+    stamp = now_ist()
+    if _range_is_open(forecast, stamp):
+        card = _range_board(forecast, nifty, gift, spot_live, status)
+    else:
+        card = _stall(stamp, status)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="60">
-<title>Nifty board</title>
+<title>Nifty 50</title>
 <style>
-  body {{ margin: 0; background: #efeae3; color: #1c1915; font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; }}
-  main {{ max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }}
-  .mast {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 8px; }}
-  h1 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #746c62; }}
-  .sub {{ margin: 4px 0 0; color: #1c1915; font: 600 36px/1.05 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  body {{ margin: 0; background: #e7e1d8; color: #1c1915; font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; }}
+  main {{ max-width: 1040px; margin: 0 auto; padding: 22px 16px 88px; }}
+  .mast {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin: 0 0 18px; padding: 22px 24px 20px; background: #161412; color: #f6f1ea; border-radius: 20px; box-shadow: 0 18px 40px rgba(22, 20, 18, .22); }}
+  .kicker {{ margin: 0; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .18em; text-transform: uppercase; color: #c4b8a4; }}
+  h1 {{ margin: 8px 0 0; font: 500 20px/1.15 ui-sans-serif, sans-serif; letter-spacing: -.02em; text-transform: none; color: #f3ece3; }}
+  h1 em {{ display: block; margin-top: 2px; font: 560 56px/1 Georgia, "Iowan Old Style", Palatino, serif; font-style: normal; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: #fff; }}
+  .when {{ margin: 6px 0 0; color: #d9d0c4; font: 600 16px/1.3 ui-sans-serif, sans-serif; }}
   .lead {{ margin: 0 0 16px; color: #5e584f; font: 15px/1.4 ui-sans-serif, sans-serif; }}
-  .status {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; padding: 7px 12px 7px 10px; background: #fff; border: 1px solid #e4ddd2; border-radius: 999px; font: 13px/1.3 ui-sans-serif, sans-serif; color: #5e584f; }}
+  .status {{ display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 0; padding: 12px 14px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; font: 13px/1.3 ui-sans-serif, sans-serif; color: #d9d0c4; }}
+  #next-run {{ color: #fff; font: 650 20px/1 ui-sans-serif, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .01em; }}
   .light {{ width: 10px; height: 10px; border-radius: 50%; background: #b9b2a6; display: inline-block; flex: none; }}
   .light.on {{ background: #0c7a3a; animation: pulse 1.6s infinite; }}
   @keyframes pulse {{
@@ -89,7 +67,8 @@ def render_page(
     70% {{ box-shadow: 0 0 0 8px rgba(12, 122, 58, 0); }}
     100% {{ box-shadow: 0 0 0 0 rgba(12, 122, 58, 0); }}
   }}
-  .state {{ color: #1c1915; font-weight: 650; }}
+  .state {{ color: #f6f1ea; font-weight: 650; }}
+  .status .row {{ display: flex; gap: 8px; align-items: center; }}
   .topline {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 12px 14px 4px; box-shadow: inset 0 3px 0 #1d4e89; }}
   .top-grid {{ display: grid; grid-template-columns: 1.5fr .9fr .9fr; gap: 12px; }}
   .top-card span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
@@ -186,8 +165,15 @@ def render_page(
   .ahead .name {{ width: auto; flex: 1; }}
   .ahead .matter {{ margin-top: 0; padding: 8px 0; border-radius: 0; background: transparent; border-top: 1px solid #f0ebe3; }}
   .ahead .due {{ margin: 0 0 4px; color: #746c62; font: 13px/1.35 ui-sans-serif, sans-serif; }}
-  .compare .story {{ margin: 8px 0 0; color: #1c1915; font: 16px/1.5 ui-sans-serif, sans-serif; }}
-  .compare .story strong {{ font-variant-numeric: tabular-nums; }}
+  .compare .story {{ margin: 8px 0 0; color: #5e584f; font: 14px/1.45 ui-sans-serif, sans-serif; }}
+  .compare .story strong {{ font-variant-numeric: tabular-nums; color: #1c1915; }}
+  .today {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 16px 18px 14px; box-shadow: inset 0 4px 0 #1d4e89, 0 12px 28px rgba(22, 20, 18, .06); }}
+  .today h2 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #4a453e; }}
+  .today .gap {{ margin: 8px 0 14px; font: 600 44px/1.05 ui-sans-serif, sans-serif; letter-spacing: -.03em; }}
+  .today .facts {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+  .today .fact span {{ display: block; color: #746c62; font: 600 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; }}
+  .today .fact strong {{ display: block; margin-top: 4px; color: #1c1915; font: 600 28px/1.1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
+  .today .fact small {{ display: block; margin-top: 4px; color: #746c62; font: 600 13px/1.2 ui-sans-serif, sans-serif; }}
   .compare .call-plot {{ margin: 2px 0 8px; }}
   .learn, .news {{ margin-top: 16px; }}
   .news {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; overflow: hidden; box-shadow: inset 3px 0 0 #1d4e89; }}
@@ -241,7 +227,7 @@ def render_page(
   .watch-pile summary::-webkit-details-marker {{ display: none; }}
   .watch-pile summary::before {{ content: "▸ "; color: #746c62; }}
   .watch-pile[open] summary::before {{ content: "▾ "; }}
-  .range-top {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 10px; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  .range-top {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 10px; box-shadow: inset 0 3px 0 #6b3fa0, 0 12px 28px rgba(22, 20, 18, .06); }}
   .range-top h2 {{ margin: 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #4a453e; }}
   .range-top .expect {{ margin: 6px 0 0; color: #1c1915; font: 600 34px/1.1 ui-sans-serif, sans-serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }}
   .range-top .due, .range-top .deck {{ margin: 4px 0 0; color: #746c62; font: 13px/1.4 ui-sans-serif, sans-serif; }}
@@ -252,7 +238,7 @@ def render_page(
   .swatch.gift {{ background: #c47b12; }}
   .pill {{ margin-left: 4px; font-style: normal; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #746c62; }}
   .pill.on {{ color: #0c7a3a; }}
-  .session {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 12px; box-shadow: inset 0 3px 0 #6b3fa0; }}
+  .session {{ background: #fff; border: 1px solid #e4ddd2; border-radius: 16px; margin: 0 0 16px; padding: 14px 16px 12px; box-shadow: inset 0 3px 0 #6b3fa0, 0 12px 28px rgba(22, 20, 18, .06); }}
   .hour > h2 {{ margin: 18px 0 0; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #4a453e; }}
   .session h2 {{ margin: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 600 12px/1.2 ui-sans-serif, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #4a453e; }}
   .session h2 .impact {{ letter-spacing: 0; font-size: 28px; }}
@@ -267,40 +253,17 @@ def render_page(
   .story.watch .title {{ color: #5e584f; }}
   @media (max-width: 800px) {{
     .mast {{ flex-direction: column; align-items: flex-start; }}
-    .sub {{ font-size: 30px; }}
-    .split, .matters, .desk, .stats, .feed-row, .learn-grid, .news-cols, .top-grid {{ grid-template-columns: 1fr; }}
-    .compare .story {{ font-size: 15px; }}
+    h1 em {{ font-size: 40px; }}
+    .status {{ align-items: flex-start; }}
+    .split, .matters, .desk, .stats, .feed-row, .learn-grid, .news-cols, .top-grid, .today .facts {{ grid-template-columns: 1fr; }}
+    .today .gap {{ font-size: 32px; }}
+    .compare .story {{ font-size: 14px; }}
   }}
 </style>
 </head>
 <body>
 <main>
-  {range_board}
-  <header class="mast">
-    <div>
-      <h1>Nifty board</h1>
-      <p class="sub" id="spot-title">{escape(level)}</p>
-    </div>
-    {status}
-  </header>
-  {session}
-  <p class="lead">{escape(lead)}</p>
-  {hour_head}
-  {topline}
-  <div class="stats">
-    {gift_tile}
-    {fii_tile}
-  </div>
-  {early}
-  {_feeds_html(feeds)}
-  <figure class="forecast">{current}<figcaption><span class="mark-spot">Spot</span> is the live index. <span class="mark-gift">GIFT</span> is the price outside India. <span class="mark-next">Next</span> is this hour's news score, not the 24-hour close. The shaded band is the usual range around the <span class="mark-mean">200-day average</span>. Faint lines are the previous three.</figcaption></figure>
-  {split}
-  {_matters(events)}
-  <figure class="errors">{errors}<figcaption>Each dot is one past hour's guess, oldest on the left. Below zero, the guess was too high. Above zero, it was too low. The dashed line is the average miss.</figcaption></figure>
-  {log}
-  {news}
-  {learning}
-  {hour_foot}
+  {card}
 </main>
 <script>
 const lastRaw = document.getElementById("status").dataset.last;
@@ -318,8 +281,16 @@ function paint() {{
   const ist = new Date(now + istShift);
   const boundary = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), ist.getUTCHours() + 1);
   const remain = Math.max(0, boundary - istShift - now);
-  const mins = Math.floor(remain / 60000);
-  next.textContent = mins >= 1 ? ("Next update in " + mins + " min") : ("Next update in " + Math.ceil(remain / 1000) + " sec");
+  next.textContent = "Next update in " + clock(remain);
+}}
+function clock(ms) {{
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = (m < 10 ? "0" : "") + m;
+  const ss = (s < 10 ? "0" : "") + s;
+  return (h > 0 ? h + ":" : "") + mm + ":" + ss;
 }}
 paint();
 setInterval(paint, 1000);
@@ -332,11 +303,13 @@ function markX(price) {{
 function fitMarks(data) {{
   if (!board) return;
   const anchor = +board.dataset.anchor, sigma = +board.dataset.sigma;
-  const low = anchor - sigma, high = anchor + sigma;
+  const half = board.dataset.half ? +board.dataset.half : sigma;
+  const center = anchor + (+board.dataset.mu || 0);
+  const low = center - half, high = center + half;
   const pts = [low, high];
   if (data.nifty && data.nifty.price != null) pts.push(+data.nifty.price);
   if (data.gift && data.gift.price != null) pts.push(+data.gift.price);
-  const cushion = Math.max(sigma * 0.25, 8);
+  const cushion = Math.max(half * 0.25, 8);
   board.dataset.lo = Math.min.apply(null, pts) - cushion;
   board.dataset.hi = Math.max.apply(null, pts) + cushion;
   const x0 = markX(low), x1 = markX(high), xa = markX(anchor);
@@ -378,10 +351,6 @@ function pullPrices() {{
     fitMarks(data);
     setMark("spot-dot", "spot-read", "spot-state", data.nifty);
     setMark("gift-dot", "gift-read", "gift-state", data.gift);
-    const title = document.getElementById("spot-title");
-    if (title && data.nifty && data.nifty.price != null) {{
-      title.textContent = "Nifty " + Math.round(+data.nifty.price).toLocaleString("en-IN");
-    }}
   }}).catch(function () {{}});
 }}
 const board = document.getElementById("range-board");
@@ -579,10 +548,10 @@ def _status(last_run: str | None) -> str:
     word = "Fresh" if fresh else ""
     return (
         f"<div class='status' id='status' data-last='{stamp}'>"
-        f"<span class='{light}' id='light'></span>"
-        f"<span class='state' id='state'>{word}</span>"
+        f"<span class='row'><span class='{light}' id='light'></span>"
+        f"<span class='state' id='state'>{word}</span></span>"
         f"<span id='last-run'>Last refresh {escape(label)}</span>"
-        f"<span id='next-run'>Next update</span>"
+        f"<span id='next-run'>Next update in --:--</span>"
         f"</div>"
     )
 
@@ -731,61 +700,107 @@ def _glance_plot(marks: list[tuple[str, float, str]]) -> str:
     return "".join(parts)
 
 
-def _compare_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: float | None = None) -> str:
-    finished, forward = _settled_calls(ensemble, history)
-    stories = []
-    if finished is not None and finished.nifty_level is not None and finished.actual is not None:
-        stories.append(f"<p class='story'>{_scored_call(finished)}</p>{_scored_plot(finished)}")
+def _headline(ensemble: Ensemble | None, history: list[Ensemble], forecast: dict | None) -> str:
+    call = _next_call(ensemble, history, forecast)
+    if call is None:
+        return "<div class='callout'><p class='kicker'>Next call</p><h1>Nifty 50</h1><p class='when'>No guess yet.</p></div>"
+    level, when = call
+    return (
+        "<div class='callout'><p class='kicker'>Next call</p>"
+        f"<h1>Nifty 50 will be <em>{escape(_level_text(level))}</em></h1>"
+        f"<p class='when'>at {escape(when)}</p></div>"
+    )
+
+
+def _next_call(ensemble: Ensemble | None, history: list[Ensemble], forecast: dict | None) -> tuple[float, str] | None:
+    _finished, forward = _settled_calls(ensemble, history)
     if forward is not None and forward.nifty_level is not None:
-        stories.append(f"<p class='story'>{_open_call(forward, nifty)}</p>{_open_plot(forward, nifty)}")
-    if not stories:
+        due = session_close(parse_ts(forward.ts))
+        at, on = _stamp_bits(due)
+        return forward.nifty_level + forward.mu, f"{at} on {on}"
+    if not forecast or forecast.get("sigma") in (None, 0) or forecast.get("anchor") in (None, 0):
+        return None
+    anchor = float(forecast["anchor"])
+    mu = float(forecast.get("mu") or 0)
+    due = str(forecast.get("due") or "")
+    try:
+        day = datetime.fromisoformat(due)
+        when = f"15:30 on {day.day} {day:%b}"
+    except ValueError:
+        when = "15:30"
+    return anchor + mu, when
+
+
+def _today_html(ensemble: Ensemble | None, history: list[Ensemble], nifty: float | None) -> str:
+    _finished, forward = _settled_calls(ensemble, history)
+    if forward is None or forward.nifty_level is None:
         return ""
-    body = "".join(stories)
+    made = parse_ts(forward.ts)
+    due = session_close(made)
+    anchor = forward.nifty_level or 0
+    predicted = anchor + forward.mu
+    made_at, made_on = _stamp_bits(made)
+    _due_at, due_on = _stamp_bits(due)
+    facts = [
+        _fact("Then", _level_text(anchor), f"{made_at}, {made_on}"),
+        _fact("Guess for 3:30", _level_text(predicted), due_on),
+    ]
+    gap = ""
+    if nifty is None:
+        facts.append(_fact("Now", "—", "Not in yet"))
+    else:
+        facts.append(_fact("Now", _level_text(nifty), "Right now"))
+        gap = f"<p class='gap {impact_class(nifty - predicted)}'>{escape(_gap_line(nifty - predicted))}</p>"
+    return (
+        "<section class='today' aria-label=\"Today's guess\">"
+        "<h2>Today's guess</h2>"
+        f"{gap}"
+        f"<div class='facts'>{''.join(facts)}</div>"
+        "</section>"
+    )
+
+
+def _fact(label: str, value: str, note: str) -> str:
+    return (
+        "<div class='fact'>"
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        f"<small>{escape(note)}</small>"
+        "</div>"
+    )
+
+
+def _gap_line(gap: float) -> str:
+    points = abs(int(round(gap)))
+    if points == 0:
+        return "Nifty is on the guess"
+    side = "below" if gap < 0 else "above"
+    return f"{points} points {side} the guess"
+
+
+def _compare_html(ensemble: Ensemble | None, history: list[Ensemble]) -> str:
+    finished, _forward = _settled_calls(ensemble, history)
+    if finished is None or finished.nifty_level is None or finished.actual is None:
+        return ""
     return (
         "<section class='compare' aria-label='Prediction against Nifty'>"
-        "<h2>This hour's past guesses</h2>"
-        "<p class='deck'>These guesses come from the news score. They are not the 24-hour range.</p>"
-        f"{body}"
+        "<h2>Last time</h2>"
+        f"<p class='story'>{_scored_call(finished)}</p>{_scored_plot(finished)}"
         "</section>"
     )
 
 
 def _scored_call(row: Ensemble) -> str:
     made = parse_ts(row.ts)
-    due = session_close(made)
     anchor = row.nifty_level or 0
     predicted = anchor + row.mu
     observed = anchor + (row.actual or 0)
     made_at, made_on = _stamp_bits(made)
-    due_at, due_on = _stamp_bits(due)
     return (
-        f"Prediction was made when Nifty 50 was {_bold(_level_text(anchor))} "
-        f"at {_bold(made_at)} on {_bold(made_on)}. "
-        f"It predicted Nifty 50 would be {_bold(_level_text(predicted))} "
-        f"at {_bold(due_at)} on {_bold(due_on)}. "
-        f"Nifty 50 was {_bold(_level_text(observed))} then. "
-        f"{_miss_phrase(observed - predicted, live=False)}."
-    )
-
-
-def _open_call(row: Ensemble, nifty: float | None) -> str:
-    made = parse_ts(row.ts)
-    due = session_close(made)
-    anchor = row.nifty_level or 0
-    predicted = anchor + row.mu
-    made_at, made_on = _stamp_bits(made)
-    due_at, due_on = _stamp_bits(due)
-    sentence = (
-        f"This prediction was made when Nifty 50 was {_bold(_level_text(anchor))} "
-        f"at {_bold(made_at)} on {_bold(made_on)}. "
-        f"It predicts Nifty 50 will be {_bold(_level_text(predicted))} "
-        f"at {_bold(due_at)} on {_bold(due_on)}."
-    )
-    if nifty is None:
-        return sentence
-    return (
-        f"{sentence} Live Nifty 50 is {_bold(_level_text(nifty))}. "
-        f"{_miss_phrase(nifty - predicted, live=True)}."
+        f"Last time. At {_bold(made_at)} on {_bold(made_on)}, Nifty was {_bold(_level_text(anchor))}. "
+        f"The guess for 3:30 was {_bold(_level_text(predicted))}. "
+        f"Nifty finished at {_bold(_level_text(observed))}. "
+        f"{_miss_phrase(observed - predicted)}."
     )
 
 
@@ -794,12 +809,6 @@ def _scored_plot(row: Ensemble) -> str:
     predicted = anchor + row.mu
     observed = anchor + (row.actual or 0)
     return _call_plot(anchor, predicted, observed, "Seen", "Last close")
-
-
-def _open_plot(row: Ensemble, nifty: float | None) -> str:
-    anchor = row.nifty_level or 0
-    predicted = anchor + row.mu
-    return _call_plot(anchor, predicted, nifty, "Live", "Still waiting")
 
 
 def _call_plot(anchor: float, predicted: float, seen: float | None, seen_name: str, label: str) -> str:
@@ -888,14 +897,11 @@ def _bold(text: str) -> str:
     return f"<strong>{escape(text)}</strong>"
 
 
-def _miss_phrase(gap: float, live: bool) -> str:
+def _miss_phrase(gap: float) -> str:
     points = abs(int(round(gap)))
     kind = impact_class(gap)
     if points == 0:
-        text = "So far the live index matches that guess" if live else "The guess matched the close"
-    elif live:
-        side = "under" if gap < 0 else "over"
-        text = f"So far the live index is {points} points {side} that guess"
+        text = "The guess matched the close"
     else:
         way = "too high" if gap < 0 else "too low"
         text = f"The guess was {points} points {way}"
@@ -926,13 +932,34 @@ def write_prices(path, nifty: dict | None, gift: dict | None) -> None:
     path.write_text(json.dumps({"nifty": pack(nifty), "gift": pack(gift)}), encoding="utf-8")
 
 
-def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, spot_live: bool) -> str:
-    if not forecast or forecast.get("sigma") in (None, 0):
-        return ""
+def _range_is_open(forecast: dict | None, stamp: datetime) -> bool:
+    if not forecast or forecast.get("sigma") in (None, 0) or not forecast.get("anchor"):
+        return False
+    return still_open(forecast, stamp)
+
+
+def _stall(stamp: datetime, status: str) -> str:
+    nxt = session_close(stamp)
+    when = f"{nxt.strftime('%A')} {nxt.day} {nxt:%b}"
+    return (
+        "<section class='close stall' aria-label='Old guess'>"
+        "<header class='mast'>"
+        "<div><p class='kicker'>Next 3:30</p>"
+        "<h1>This guess is old.</h1>"
+        f"<p class='when'>The next 3:30 is 15:30 on {escape(when)}.</p>"
+        "</div>"
+        f"{status}</header></section>"
+    )
+
+
+def _range_board(forecast: dict, nifty: float | None, gift: dict | None, spot_live: bool, status: str) -> str:
     anchor = float(forecast["anchor"])
+    mu = float(forecast.get("mu") or 0)
     sigma = float(forecast["sigma"])
-    low = anchor - sigma
-    high = anchor + sigma
+    half = shown_half(forecast.get("proof"), sigma)
+    center = anchor + mu
+    low = center - half
+    high = center + half
     spot = None if nifty is None else float(nifty)
     gift_px = None if not gift or gift.get("price") is None else float(gift["price"])
     gift_live = bool(gift and gift.get("live"))
@@ -941,7 +968,7 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         points.append(spot)
     if gift_px is not None:
         points.append(gift_px)
-    cushion = max(sigma * 0.25, 8)
+    cushion = max(half * 0.25, 8)
     lo = min(points) - cushion
     hi = max(points) + cushion
     width, pad = 680, 28
@@ -960,19 +987,35 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         )
 
     due = escape(_due_label(str(forecast.get("due") or "")))
+    if int(round(mu)) == 0:
+        middle = f"The middle is the last close, {anchor:,.0f}. No extra up or down."
+        stayed = ", so the middle stayed put"
+    else:
+        middle = f"The middle is {center:,.0f}."
+        stayed = ""
+    proof = forecast.get("proof") or {}
+    fit = float(proof.get("fit") or 0)
+    flat = float(proof.get("flat") or 0)
+    miss = f"The fit missed by {fit:.0f} points. No change missed by {flat:.0f}{stayed}."
     spot_text = "—" if spot is None else f"{spot:,.0f}"
     gift_text = "—" if gift_px is None else f"{gift_px:,.0f}"
     spot_on = spot_live and spot is not None
     gift_on = gift_live and gift_px is not None
     x0, x1, xa = sx(low), sx(high), sx(anchor)
     return (
-        "<section class='range-top' aria-label='Next 24h close'>"
-        "<h2>Next 24h close</h2>"
-        f"<p class='expect'>{low:,.0f} – {high:,.0f}</p>"
-        f"<p class='due'>{due}, the 3:30 pm cash close.</p>"
+        f"<section class='close' data-session='{mu:.1f}' aria-label='Next 3:30'>"
+        "<header class='mast'>"
+        "<div><p class='kicker'>Next 3:30</p>"
+        f"<h1>Nifty 50 may finish between <em>{low:,.0f} – {high:,.0f}</em></h1>"
+        f"<p class='when'>at 15:30 on {due}.</p>"
+        f"<p class='when'>{middle}</p>"
+        f"<p class='when'>{miss}</p>"
+        f"<p class='when'>{escape(range_coverage(proof))}</p>"
+        f"</div>{status}</header>"
+        "<div class='range-top'>"
         f"<svg id='range-board' viewBox='0 0 {width} 118' role='img' aria-label='This range with Nifty and GIFT' "
         f"data-lo='{lo:.4f}' data-hi='{hi:.4f}' data-pad='{pad}' data-width='{width}' "
-        f"data-anchor='{anchor:.4f}' data-sigma='{sigma:.4f}'>"
+        f"data-anchor='{anchor:.4f}' data-mu='{mu:.4f}' data-sigma='{sigma:.4f}' data-half='{half:.4f}'>"
         f"<rect id='band-shade' x='{x0:.1f}' y='70' width='{max(1.0, x1 - x0):.1f}' height='22' rx='6' fill='rgba(107,63,160,.22)'></rect>"
         f"<line id='band-anchor' x1='{xa:.1f}' y1='58' x2='{xa:.1f}' y2='108' stroke='#1c1915' stroke-width='2'></line>"
         f"<text id='range-low' x='{x0:.1f}' y='24' text-anchor='middle' fill='#4a453e' font-size='13' font-weight='600'>{low:,.0f}</text>"
@@ -987,8 +1030,8 @@ def _range_board(forecast: dict | None, nifty: float | None, gift: dict | None, 
         f"<span><i class='swatch gift'></i> GIFT <b id='gift-read'>{gift_text}</b> "
         f"<em id='gift-state' class='{'pill on' if gift_on else 'pill'}'>{'Live' if gift_on else 'Closed'}</em></span>"
         "</p>"
-        "<p class='deck'>The shade is this range for the 3:30 pm close. The marks are the latest Nifty and GIFT prints. They refresh while that market is live.</p>"
-        "</section>"
+        "<p class='deck'>The shaded band is this range. The dots are Nifty now and GIFT.</p>"
+        "</div></section>"
     )
 
 
@@ -1001,18 +1044,18 @@ def _session_html(forecast: dict | None) -> str:
     low = anchor - sigma
     high = anchor + sigma
     due = _due_label(str(forecast.get("due") or ""))
-    move_label = "No move added" if int(round(mu)) == 0 else impact_text(mu)
+    move_label = "No change" if int(round(mu)) == 0 else impact_text(mu)
     raw = float(forecast.get("raw") or 0)
     rehearsal, live = _session_proofs(forecast.get("proof") or {}, raw, mu)
     proof_html = _proof_block("Past checks", rehearsal) + _proof_block("On this version", live)
     drivers = "" if int(round(mu)) == 0 else _session_drivers(forecast.get("parts") or [])
     trail = _strive_svg(forecast.get("trail") or [])
-    sides = " The range is centered on the last close, so the two sides are equal." if int(round(mu)) == 0 else ""
-    signed = "<p class='deck'>The builder and a second reviewer both agreed to this range.</p>" if forecast.get("signed") else ""
+    sides = " The range sits on the last close, so both sides are the same." if int(round(mu)) == 0 else ""
+    signed = "<p class='deck'>Two checks agreed on this range.</p>" if forecast.get("signed") else ""
     return (
         "<section class='session'>"
-        f"<h2>How this range was set <span class='impact {impact_class(mu)}' data-session='{mu:.1f}'>{move_label}</span></h2>"
-        f"<p class='due'>{escape(due)}, the 3:30 pm cash close.</p>"
+        f"<h2>Why the 3:30 range looks like this <span class='impact {impact_class(mu)}' data-session='{mu:.1f}'>{move_label}</span></h2>"
+        f"<p class='due'>{escape(due)}, the 3:30 close.</p>"
         f"<p class='deck'>Last close <strong>{anchor:,.0f}</strong>. "
         f"The range runs from {low:,.0f} to {high:,.0f}.{sides}</p>"
         f"{_move_bell(anchor, sigma)}"
@@ -1020,22 +1063,14 @@ def _session_html(forecast: dict | None) -> str:
         "<p class='deck'>The middle stays on the last close until 60 new closes beat a no-change guess by 15 points.</p>"
         f"{proof_html}"
         f"{trail}"
-        "<p class='deck'>This is a probability, not a promise. The shade is this range.</p>"
+        "<p class='deck'>This is a chance, not a promise. The shaded band is this range.</p>"
         f"{signed}"
         "</section>"
     )
 
 
 def _coverage_sentence(proof: dict) -> str:
-    window = int(proof.get("window") or 0)
-    if window < 20:
-        return "This range needs a few dozen checked closes before that share means much."
-    held = float(proof.get("band") or 0)
-    pct = round(held * 100)
-    sentence = f"This range held {pct} of the last {window} past checks."
-    if abs(held - band_mass()) <= 0.04:
-        sentence += " That is about 68%."
-    return sentence
+    return range_coverage(proof)
 
 
 def _proof_block(title: str, lines: list[str]) -> str:
@@ -1047,7 +1082,7 @@ def _due_label(due: str) -> str:
     try:
         found = datetime.fromisoformat(due)
     except ValueError:
-        return due or "Next cash close"
+        return due or "the next 3:30"
     return f"{found:%A} {found.day} {found:%b}"
 
 
@@ -1193,7 +1228,7 @@ def _ahead_html(ahead: dict | None) -> str:
             f"<span class='impact ahead-point {impact_class(points)}'>{impact_text(points)}</span>"
             "</div>"
         )
-    body = "\n".join(rows) or "<p class='due'>No drivers yet.</p>"
+    body = "\n".join(rows) or "<p class='due'>Nothing in this yet.</p>"
     due = escape(str(ahead.get("due") or ""))
     note = escape(str(ahead.get("note") or ""))
     note_html = f"<p class='due'>{note}</p>" if note else ""
@@ -1202,7 +1237,7 @@ def _ahead_html(ahead: dict | None) -> str:
         f"<h2>Next close <span class='impact {impact_class(total)}' data-ahead='{total}'>{impact_text(total)}</span></h2>"
         f"<p class='due'>Due {due}</p>"
         f"{note_html}"
-        "<p class='deck'>What is already in the next session’s move.</p>"
+        "<p class='deck'>What is already in the next close.</p>"
         f"{body}"
         "</section>"
     )
@@ -1242,11 +1277,11 @@ def _matters(events: list[Event]) -> str:
     watch_html = _matter_rows(watching) or "<p class='matter'><span class='line'>Every agent answered.</span></p>"
     return (
         "<div class='matters'>"
-        f"<section><h2>What moved this hour{_mover_total(moving)}</h2>"
-        "<p class='deck'>Points these stories added to this hour's score. Bigger numbers moved it more.</p>"
+        f"<section><h2>What pushed the guess{_mover_total(moving)}</h2>"
+        "<p class='deck'>Points these stories added this hour. Bigger numbers moved the guess more.</p>"
         f"{move_html}</section>"
         f"<section><h2>No clear story</h2>"
-        "<p class='deck'>Amber is waiting. Red had no answer. Neither is in this hour's number.</p>"
+        "<p class='deck'>Waiting, or no answer. These did not change the number.</p>"
         f"{watch_html}</section>"
         "</div>"
     )
@@ -1296,8 +1331,8 @@ def _activity(events: list[Event], feeds: list[dict] | None = None) -> str:
     story = _call_story(latest, feeds)
     return (
         "<section class='roster'>"
-        f"<div class='roster-head'><span>Agents</span><span class='{tone}'>{checked} of 8</span></div>"
-        "<p class='deck'>This hour, then earlier hours. Each line says who answered and how this hour's score was made.</p>"
+        f"<div class='roster-head'><span>Who answered</span><span class='{tone}'>{checked} of 8</span></div>"
+        "<p class='deck'>This hour first, then earlier hours. Each line says who answered, and how this hour's number was made.</p>"
         f"{_roster_rows(latest)}{score_html}<p class='how'>{escape(story)}</p>{trail}"
         "</section>"
     )
@@ -1319,7 +1354,7 @@ _LEARN_COLOR = {
 def _news(families: list[tuple[str, int, float]]) -> str:
     heavier, lighter = news_shifts(families)
     if not heavier and not lighter:
-        body = "<p class='deck wait'>These weights start after a story is checked.</p>"
+        body = "<p class='deck wait'>These lessons start after a story is checked.</p>"
     else:
         body = (
             "<div class='news-cols'>"
@@ -1330,8 +1365,8 @@ def _news(families: list[tuple[str, int, float]]) -> str:
     return (
         "<section class='news' id='news'>"
         "<div class='roster-head'><span>News</span></div>"
-        "<p class='deck'>These are old weights, not today's news. "
-        "A bigger number means that kind of story has moved the hour's score by more points.</p>"
+        "<p class='deck'>These are old lessons, not today's news. "
+        "A bigger number means that kind of story has moved the hour's number by more points.</p>"
         f"{body}</section>"
     )
 
@@ -1370,9 +1405,7 @@ def _learning(claims: list[Claim], ensembles: list[Ensemble]) -> str:
     return (
         "<section class='learn' id='learning'>"
         "<div class='roster-head'><span>Later checks</span></div>"
-        "<p class='deck'>The line is this score. Above 50, the later miss is smaller. The grey line is 50, no change. "
-        "The word next to the score is used only after 4 different closes. "
-        "Each card shows that score, then the points added to this hour's score. Above zero on the card, the row has been too low.</p>"
+        "<p class='deck'>Above 50 means the later guesses missed by less. The grey line is 50, no change.</p>"
         f"{banner}"
         f"<div class='learn-grid'>{''.join(cards)}</div>{wait}</section>"
     )
@@ -1389,7 +1422,7 @@ def _gain_kind(score: int) -> tuple[str, str]:
 def _gain_banner(misses: list[float], ensembles: list[Ensemble]) -> str:
     trail = learning_trail(misses, keep=48)
     if not trail:
-        return "<p class='deck wait'>The board line starts after 4 checked guesses.</p>"
+        return "<p class='deck wait'>This line starts after 4 checked guesses.</p>"
     proof = learning_proof(misses, _session_closes(ensembles))
     if proof is not None and proof["proved"]:
         word, kind = _gain_kind(proof["score"])

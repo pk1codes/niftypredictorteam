@@ -5,7 +5,7 @@ import json
 
 from niftyteam.ahead import ahead_view
 from niftyteam.evolve import evolve_view
-from niftyteam.signoff import presented, write_public_forecast
+from niftyteam.signoff import display_close, write_public_forecast
 from niftyteam.chart import render_page, write_prices
 from niftyteam.config import find_root, impact_text, load_dotenv, now_ist
 from niftyteam.search import live_quotes
@@ -63,6 +63,7 @@ def main() -> None:
                 notes = json.loads(raw_notes) if raw_notes else []
             except json.JSONDecodeError:
                 notes = []
+            shown = display_close(store, now_ist(), look=True)
             html = render_page(
                 latest,
                 residuals,
@@ -80,7 +81,7 @@ def main() -> None:
                 ahead_view(store),
                 important_view(store),
                 store.families(),
-                presented(store, now_ist()),
+                shown,
                 spot_live=spot_live,
             )
             path = root / "data" / "chart.html"
@@ -91,7 +92,6 @@ def main() -> None:
                 None if level is None else {"price": level, "live": spot_live},
                 gift,
             )
-            shown = presented(store, now_ist())
             write_public_forecast(path.parent / "forecast.json", shown)
             write_public_forecast(root / "docs" / "forecast.json", shown)
             print(path)

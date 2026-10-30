@@ -5,10 +5,11 @@ import pytest
 
 from niftyteam.chart import render_page
 from niftyteam.config import IST
-from niftyteam.signoff import author_review, digest, note_author, note_critic, presentable, public_forecast
+from niftyteam.signoff import author_review, digest, display_close, note_author, note_critic, presentable, public_forecast
 from niftyteam.evolve import (
     band_mass,
     coverage_scale,
+    counted_width,
     feature_row,
     gap_phrase,
     live_ready,
@@ -86,6 +87,14 @@ def test_the_band_scale_uses_only_past_misses_and_live_needs_sixty():
     assert live_ready(close) is False
 
 
+def test_the_counted_band_holds_at_least_ninety_percent():
+    misses = [float(index) for index in range(1, 81)]
+    half, share = counted_width(misses)
+    assert half == 72
+    assert share == pytest.approx(0.90)
+    assert sum(1 for miss in misses if miss <= half) / len(misses) >= 0.90
+
+
 def test_shaded_band_is_the_normal_middle():
     assert band_mass() == pytest.approx(0.6827, abs=0.001)
     assert up_chance(0, 100) == pytest.approx(0.5, abs=0.001)
@@ -110,6 +119,8 @@ def test_an_open_session_is_not_the_anchor_and_friday_points_at_monday():
     assert gap_phrase("2026-10-21", "2026-10-22") == "about 24 hours after the last close"
     assert done["sigma"] > 0
     assert done["mu"] == 0
+    assert done["proof"]["wide_share"] >= 0.90
+    assert done["proof"]["wide"] > done["sigma"]
 
 
 def test_a_forecast_is_shown_only_after_both_signatures(tmp_path):
@@ -143,6 +154,14 @@ def test_a_forecast_is_shown_only_after_both_signatures(tmp_path):
         stamp,
     )
     assert shown["anchor"] == 22811.35
+    late = datetime(2026, 10, 22, 16, tzinfo=IST)
+    assert presentable(
+        view,
+        {"verdict": "agree", "digest": digest(view)},
+        {"verdict": "agree", "digest": digest(view)},
+        view,
+        late,
+    ) is None
     newer = dict(view, sigma=150.0)
     note_author(store, newer)
     assert presentable(
@@ -155,11 +174,53 @@ def test_a_forecast_is_shown_only_after_both_signatures(tmp_path):
     store.close()
 
 
+def test_an_old_close_is_replaced_by_a_fresh_look(tmp_path):
+    from niftyteam.store import Store
+
+    books = _walk(date(2099, 1, 9), 100, seed=5)
+    last = books["nifty"][-1][0]
+    store = Store(tmp_path / "look.sqlite")
+    old = {
+        "anchor": 22000.0,
+        "anchor_day": "2026-10-15",
+        "due": "2026-10-16",
+        "mu": 0.0,
+        "sigma": 100.0,
+        "raw": 0.0,
+        "proof": {"band": 0.66, "window": 80, "live_n": 0, "fit": 10, "flat": 10, "momentum": 12, "studied": 80},
+    }
+    note_author(store, old)
+    note_critic(store, old, "agree", [])
+    stamp = datetime.fromisoformat(last + "T16:10:00").replace(tzinfo=IST)
+    calls = {"n": 0}
+
+    def fetch():
+        calls["n"] += 1
+        return books
+
+    shown = display_close(store, stamp, fetch=fetch, look=True)
+    assert calls["n"] == 1
+    assert shown is not None
+    assert shown["due"] == next_session(last)
+    assert shown["anchor_day"] == last
+    assert shown["mu"] == 0
+    assert shown["signed"] is False
+    page = render_page(None, [], [], 25000, 0, forecast=shown)
+    assert "may finish between" in page
+    assert "This guess is old." not in page
+    again = display_close(store, stamp, fetch=fetch, look=True)
+    assert calls["n"] == 1
+    assert again["due"] == shown["due"]
+    missed = display_close(store, stamp, fetch=lambda: None, look=True)
+    assert missed["due"] == shown["due"]
+    store.close()
+
+
 def test_the_page_shows_the_bell_and_the_proofs():
     view = {
         "anchor": 25000,
         "anchor_day": "2026-10-21",
-        "due": "2026-10-22",
+        "due": "2099-01-04",
         "gap": "about 24 hours after the last close",
         "mu": 0,
         "raw": 42,
@@ -176,6 +237,8 @@ def test_the_page_shows_the_bell_and_the_proofs():
             "flat": 150,
             "momentum": 210,
             "band": 0.66,
+            "wide": 400,
+            "wide_share": 0.90,
             "direction": None,
             "direction_n": 0,
             "earlier": 155,
@@ -197,32 +260,35 @@ def test_the_page_shows_the_bell_and_the_proofs():
         forecast=view,
         spot_live=False,
     )
-    assert page.index("Next 24h close") < page.index("<h1>Nifty board</h1>")
-    assert "24,850" in page and "25,150" in page
+    assert "may finish between" in page
+    assert "at 15:30 on Sunday 4 Jan" in page
+    assert "24,600" in page and "25,400" in page
     assert "id='spot-dot'" in page and "id='gift-dot'" in page
     assert "prices.json" in page
     assert "id='spot-state' class='pill'>Closed" in page
     assert "id='gift-state' class='pill on'>Live" in page
-    assert "How this range was set" in page
+    assert "The fit missed by 140" in page
+    assert "No change missed by 150" in page
+    assert "middle stayed put" in page
     shared = public_forecast(view)
-    assert shared["low_text"] == "24,850"
-    assert shared["high_text"] == "25,150"
+    assert shared["low_text"] == "24,600"
+    assert shared["high_text"] == "25,400"
     assert shared["anchor_text"] == "25,000"
     assert shared["mu"] == 0
-    assert "held 66 of the last 80 past checks" in shared["coverage"]
-    assert "about 68%" in shared["coverage"]
+    assert shared["coverage"] == "90% of the last 80 past checks finished inside a range this wide."
     assert shared["signed_line"] == ""
     assert "data-session='0.0'" in page
-    assert "This range" in page
-    assert "held 66 of the last 80 past checks" in page
-    assert "about 68%" in page
-    assert "no change" in page
-    assert "not a promise" in page
-    assert "A side sum pointed up 42 points. It is not part of the range." in page
-    assert "On this version" in page
-    assert "No close has been checked yet." in page
-    assert "<h2>Next close" not in page
-    assert "Before that caution" not in page
+    assert "90% of the last 80 past checks finished inside a range this wide." in page
+    assert "will be" not in page
+    assert "Next close" not in page
+    assert "Next open" not in page
+    assert "this hour guessed" not in page
+    stale = dict(view, due="2026-10-22")
+    old = render_page(None, [], [], 25120, 0, forecast=stale)
+    assert "24,600" not in old and "25,400" not in old
+    assert "This guess is old." in old
+    assert "may finish between" not in old
+    assert "id='spot-dot'" not in old
 
 
 def _walk(end: date, count: int, seed: int) -> dict[str, list[tuple[str, float]]]:

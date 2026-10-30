@@ -143,96 +143,27 @@ def test_score_updates_weight_and_chart_colors():
         1166,
         history=history,
     )
-    assert "GIFT Nifty" in page
-    assert "23,085" in page
-    forecast = page.split("aria-label='Prediction'", 1)[1].split("</svg>", 1)[0]
-    assert "Spot 25,000" in forecast
-    assert "GIFT 23,085" in forecast
-    assert "Next -35" in forecast
-    assert "Average 24,494" in forecast
-    assert "10,000" not in forecast
-    assert "stroke='#0c7a3a'" in forecast
-    assert "stroke='#b86e00'" in forecast
-    assert "stroke='#1d4e89'" in forecast
-    assert "stroke='#6b3fa0'" in forecast
-    assert "200-day average" in page
-    assert "previous three" in page
-    assert "stroke-opacity='0.18'" in forecast
-    assert "stroke-opacity='0.35'" in forecast
-    assert "stroke-opacity='0.55'" in forecast
-    assert "stroke='#6b3fa0' stroke-width='2' points=" in forecast
-    assert "Not enough scores" in page
-    assert "FII net" in page
-    assert "+1,166 cr" in page
-    assert "class='impact minus'>-60" in page
-    assert "class='impact plus'>+20" in page
-    assert "<h2>What moved this hour<span class='impact minus'>-40</span></h2>" in page
     assert impact_class(0) == "flat"
+    assert "This guess is old." in page
     assert "class='light on'" in page
     assert f"Last refresh {stamp.strftime('%d %b %H:%M')}" in page
-    assert "7 of 8" in page
-    assert "Scout looked across the web." in page
-    assert "Market was closed" in page
-    assert "Oil jumps" in page
-    assert "Range 22" in page
-    assert "Checked the open prediction." in page
-    assert "Needs a look" not in page
-    assert "Watching. Every agent is working." in page
-    assert "The score this hour was -35." in page
-    assert "Crude added -60: Oil jumps." in page
-    assert "World added +20: Asia higher." in page
-    assert "Rupee, Policy and Flows had no clear story." in page
-    assert "Options found the market was closed." in page
-    assert "Weights had no answer." in page
-    assert f"{(stamp - timedelta(hours=1)).strftime('%H:%M')} · 1 of 8 · score +8" in page
-    assert "The score this hour was +8." in page
+    assert "will be" not in page
+    assert "Next close" not in page
+    assert "Next open" not in page
+    assert "this hour guessed" not in page
+    assert "Oil jumps" not in page
 
 
-def test_called_level_sits_beside_the_live_nifty():
-    done = Ensemble(
-        id="old", ts="2026-10-16T10:00:00+05:30", mu=40, sigma=20, n_shocks=2, nifty_level=24800, actual=10,
+def test_a_past_close_does_not_keep_its_band():
+    page = render_page(
+        None, [], [], 24910, 0,
+        forecast={"anchor": 24900, "sigma": 80, "mu": 0, "due": "2026-10-19", "proof": {"fit": 10, "flat": 12, "band": 0.66, "window": 80}},
     )
-    call = Ensemble(id="e", ts="2026-10-19T10:00:00+05:30", mu=15, sigma=20, n_shocks=1, nifty_level=24900)
-    page = render_page(call, [], [], 24910, 0, history=[done, call])
-    card = page.split("aria-label='Prediction against Nifty'", 1)[1].split("</section>", 1)[0]
-    assert "Prediction was made when Nifty 50 was" in card
-    assert "24,800" in card
-    assert "at <strong>10:00</strong> on <strong>16 Oct</strong>" in card
-    assert "would be" in card
-    assert "24,840" in card
-    assert "at <strong>15:30</strong> on <strong>16 Oct</strong>" in card
-    assert "Nifty 50 was <strong>24,810</strong> then" in card
-    assert "24,810" in card
-    assert "The guess was 30 points too high" in card
-    assert "This prediction was made when Nifty 50 was" in card
-    assert "24,900" in card
-    assert "at <strong>10:00</strong> on <strong>19 Oct</strong>" in card
-    assert "will be" in card
-    assert "24,915" in card
-    assert "at <strong>15:30</strong> on <strong>19 Oct</strong>" in card
-    assert "Live Nifty 50 is" in card
-    assert "24,910" in card
-    assert "So far the live index is 5 points under that guess" in card
-    assert "aria-label='Last close'" in card
-    assert "aria-label='Still waiting'" in card
-    assert "When 24,800" in card
-    assert "Predicted 24,840" in card
-    assert "Seen 24,810" in card
-    assert "When 24,900" in card
-    assert "Predicted 24,915" in card
-    assert "Live 24,910" in card
-    assert "stroke='#c62828'" in card
-    pending = render_page(call, [], [], None, 0)
-    assert "will be" in pending
-    assert "24,915" in pending
-    assert "Live Nifty 50 is" not in pending
-    assert " then (" not in pending
-    open_plot = pending.split("aria-label='Still waiting'", 1)[1].split("</svg>", 1)[0]
-    assert "When 24,900" in open_plot
-    assert "Predicted 24,915" in open_plot
-    assert "Live " not in open_plot
-    blank = render_page(None, [], [], 24810, 0)
-    assert "Prediction was made" not in blank
+    assert "This guess is old." in page
+    assert "24,820" not in page and "24,980" not in page
+    assert "may finish between" not in page
+    assert "id='spot-dot'" not in page
+    assert "will be" not in page
 
 
 def test_topline_puts_the_last_close_next_open_and_gift_first():
@@ -246,20 +177,9 @@ def test_topline_puts_the_last_close_next_open_and_gift_first():
     page = render_page(
         None, [], [], 24810, 1, gift={"price": 24900, "change": 15}, history=[done], open_call=opened,
     )
-    top = page.split("aria-label='Predictions at a glance'", 1)[1].split("</section>", 1)[0]
-    assert top.index("Last close") < top.index("Next open") < top.index("GIFT Nifty")
-    assert "24,840" in top
-    assert "24,810" in top
-    assert ">-30<" in top or "-30" in top
-    assert "24,835" in top
-    assert "09:15" in top
-    assert "20 Oct" in top
-    assert "24,900" in top
-    assert "+15" in top
-    assert "Predicted 24,840" in top
-    assert "Nifty 24,810" in top
-    assert "Open 24,835" in top
-    assert "GIFT 24,900" in top
+    assert "Next open" not in page
+    assert "this hour guessed" not in page
+    assert "24,900" not in page
 
 
 def test_mover_total_sums_the_shown_numbers():
@@ -327,10 +247,8 @@ def test_news_shifts_split_heavier_from_lighter():
     assert {"label": "Earthquake", "points": 11} in lighter
     assert all(row["label"] != "Brent" for row in heavier + lighter)
     page = render_page(None, [], [], 25000, 8, families=[("policy:down", 2, -400), ("crude:up", 10, -2000)])
-    block = page.split("id='news'", 1)[1].split("</section>", 1)[0]
-    assert "RBI tightening" in block.split("Stories that have counted for less", 1)[0]
-    assert "Oil easing" in block.split("Stories that have counted for less", 1)[1]
-    assert "These weights start after a story is checked." in render_page(None, [], [], None, 0)
+    assert "RBI tightening" not in page
+    assert "Stories that have counted" not in page
 
 
 def test_error_is_split_and_reused():
@@ -745,10 +663,8 @@ def test_learning_row_shows_the_next_shift():
     claim.residual = 10
     claim.ts = now.isoformat()
     page = render_page(None, [], [], 25000, 4, claims=[claim])
-    assert "Not enough scores" in page
-    assert "The board line starts after 4 checked guesses." in page
-    row = page.split(">World<", 1)[1].split("</div>", 1)[0]
-    assert "+2" in row
+    assert "Not enough scores" not in page
+    assert "This line starts after 4 checked guesses." not in page
 
 
 def _scored_rows(misses: list[float], beat: str = "global", closes: bool = False):
@@ -777,12 +693,7 @@ def test_improving_rises_when_later_misses_shrink():
     page = render_page(None, [], [], 25000, 8, history=history, claims=claims)
     score = learning_score(misses)
     assert score > 50
-    assert f"class='gain up'>{score}</strong> Better" in page
-    assert "8 different closes, so the later miss is smaller." in page
-    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
-    assert "stroke='#0c7a3a'" in line
-    row = page.split(">World<", 1)[1].split("</svg>", 1)[0]
-    assert f"class='gain up'>{score}" in row
+    assert "Better" not in page
 
 
 def test_improving_falls_when_later_misses_grow():
@@ -791,24 +702,17 @@ def test_improving_falls_when_later_misses_grow():
     page = render_page(None, [], [], 25000, 8, history=history)
     score = learning_score(misses)
     assert score < 50
-    assert f"class='gain down'>{score}</strong> Worse" in page
-    assert "8 different closes, so the later miss is larger." in page
-    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
-    assert "stroke='#c62828'" in line
+    assert "Worse" not in page
 
 
 def test_improving_stays_unproved_when_one_close_is_repeated():
     misses = [20, 20, 20, 20, 4, 4, 4, 4]
     _claims, history = _scored_rows(misses)
     page = render_page(None, [], [], 25000, 8, history=history)
-    assert "Too few closes" in page
-    assert ">20</b>" in page
-    assert ">4</b>" in page
-    assert "too soon to trust" in page
+    assert learning_score(misses) > 50
+    assert "Too few closes" not in page
     assert "Better" not in page
     assert "Worse" not in page
-    line = page.split("aria-label='Improving'", 1)[1].split("</svg>", 1)[0]
-    assert "stroke='#746c62'" in line
 
 
 def test_pulse_and_tijori_join_the_agent_feeds():
@@ -860,17 +764,9 @@ def test_important_feeds_show_that_they_were_checked():
             {"label": "Tijori", "state": "miss", "detail": "No answer"},
         ],
     )
-    assert "Stories" in page
-    assert "class='feed ok'" in page
-    assert "Pulse" in page
-    assert "Checked · 8 stories" in page
-    assert "CoreWeave jumps" in page
-    assert "1 of 1 was counted, adding <strong class='plus'>+8</strong>." in page
-    assert "Kept, because it may move Nifty." in page
-    assert "class='feed bad'" in page
-    assert "Tijori" in page
-    assert "No answer" in page
-    assert "Stories" not in render_page(None, [], [], None, 0)
+    assert "Stories" not in page
+    assert "Pulse" not in page
+    assert "Tijori" not in page
 
 
 def test_an_important_feed_starts_with_more_weight(tmp_path):

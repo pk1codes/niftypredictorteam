@@ -8,7 +8,7 @@ import httpx
 
 from niftyteam.ahead import ahead_view, run_ahead
 from niftyteam.evolve import run_evolve
-from niftyteam.signoff import presented, write_public_forecast
+from niftyteam.signoff import display_close, write_public_forecast
 from niftyteam.boss import agree_to_rescue, boss_sentence, crew_sentence, missed, wake, watch_line
 from niftyteam.chart import render_page, write_prices
 from niftyteam.config import (
@@ -193,7 +193,7 @@ def tick(root=None) -> int:
             run_evolve(store, stamp)
         except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError):
             pass
-        forecast = presented(store, stamp)
+        forecast = display_close(store, stamp)
         _write_chart(store, root, ensemble, nifty, gift, open_call, forecast)
         _print_board(store)
         return 0

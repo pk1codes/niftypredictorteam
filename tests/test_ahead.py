@@ -1,5 +1,4 @@
 import json
-import re
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -119,11 +118,9 @@ def test_point_contributions_equal_the_predicted_move():
         0,
         ahead={"move": 0.8, "parts": [("Five sessions", 0.4), ("Base", 0.4)], "due": "2026-10-20"},
     )
-    shown = [int(item) for item in re.findall(r"ahead-point[^>]*>([+-]?\d+)", page)]
-    total = int(re.search(r"data-ahead='(-?\d+)'", page).group(1))
-    assert sum(shown) == total == 1
-    assert "Next close" in page
-    assert "Due 2026-10-20" in page
+    assert "Next close" not in page
+    assert "Next open" not in page
+    assert "will be" not in page
 
 
 def test_a_live_call_shows_parts_that_sum_to_the_move(tmp_path):
@@ -314,7 +311,8 @@ def test_the_page_names_a_worse_window(tmp_path):
         store.finish_ahead(day, 10, "scored")
     assert improvement_note(store) == "Better than the previous 20"
     page = render_page(None, [], [], None, 0, ahead={"move": 0, "parts": [], "due": "2026-10-20", "note": improvement_note(store)})
-    assert "Better than the previous 20" in page
+    assert "Better than the previous 20" not in page
+    assert "Next close" not in page
     store.close()
 
 
