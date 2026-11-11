@@ -1,3 +1,20 @@
 {
-  "ready": false
+  "ready": true,
+  "anchor": 25337.8,
+  "anchor_text": "25,338",
+  "anchor_day": "2026-11-11",
+  "due": "2026-11-12",
+  "due_label": "Thursday 12 Nov",
+  "gap": "about 24 hours after the last close",
+  "mu": 0.0,
+  "sigma": 169.31,
+  "low": 24977.55,
+  "high": 25698.05,
+  "low_text": "24,978",
+  "high_text": "25,698",
+  "signed": false,
+  "coverage": "90% of the last 80 past checks finished inside a range this wide.",
+  "center": "The middle stays on the last close until 60 new closes beat a no-change guess by 15 points.",
+  "record": "On this version, 15 closes were checked, with a typical miss of 210.",
+  "signed_line": ""
 }
